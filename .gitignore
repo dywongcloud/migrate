@@ -9,3 +9,4 @@ kernel/build/
 *.snap
 *.mem
 bin/
+.DS_Store
