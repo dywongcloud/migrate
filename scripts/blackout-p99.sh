@@ -1,6 +1,8 @@
 #!/bin/bash
 # Run N live migrations and report p50/p99 guest blackout, asserting p99 <= 30ms.
 set -uo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 N=${1:-20}
 MEM=${2:-128}
 BIN=/Users/dylanwong/daedal/bin/daedald-linux-arm64

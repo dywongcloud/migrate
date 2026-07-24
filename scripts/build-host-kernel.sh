@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euxo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux make
 SRC=~/pvm/host-linux
 PATCHES=/Users/dylanwong/daedal/kernel/patches
 CFG=/Users/dylanwong/daedal/kernel/config-ubuntu-noble-x86_64

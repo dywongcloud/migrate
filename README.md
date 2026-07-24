@@ -64,9 +64,17 @@ foundation this live-migration work builds on.
 ## Run it
 
 Everything runs inside a Lima VM that provides nested KVM on macOS (`daedal-kvm`).
+The `scripts/` use Linux-only tooling (`mkfs.ext4`, `ip`, `podman`, `/dev/kvm`),
+so run them from a shell *inside* the VM, not on the macOS host -- the repo is
+mounted at the same path inside the VM. Run on the host by mistake, each script
+fails fast with a pointer here instead of a cryptic `command not found`.
 
 ```sh
-# in the VM: build firecracker + the uffd handler, fetch the guest kernel,
+# open a shell inside the VM first (the repo is mounted at the same path)
+limactl shell daedal-kvm
+cd /Users/dylanwong/daedal
+
+# build firecracker + the uffd handler, fetch the guest kernel,
 # build the rootfs and the self-contained container "host" image
 bash scripts/build-rootfs.sh
 bash scripts/build-net-rootfs.sh          # networked guest with the UDP beacon

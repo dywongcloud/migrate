@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 B=/Users/dylanwong/daedal/kernel/build
 BIN=/Users/dylanwong/daedal/bin/daedald-linux-arm64
 STATE=/tmp/daedald-kvm

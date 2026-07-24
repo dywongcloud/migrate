@@ -4,6 +4,8 @@
 # destination lazily over UFFD, so it is NOT loaded during the pause -> the
 # blackout is only (pause source + final diff + merge + dest restore/resume).
 set -uo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 B=/Users/dylanwong/daedal/kernel/build
 FC=/usr/local/bin/firecracker
 UFFD=$(find ~/fc/firecracker-next/build ~/fc/firecracker-next/target -name uffd_on_demand_handler -type f -executable 2>/dev/null | head -1)

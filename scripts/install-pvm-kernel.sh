@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euxo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 # Run INSIDE daedal-pvm AFTER scripts/stage-host-modules.sh has run in daedal-kvm.
 # Installs the cross-compiled PVM host kernel + modules (staged on the shared
 # ~/daedal mount), rebuilds initramfs, points GRUB at it with pti=off, reboots.

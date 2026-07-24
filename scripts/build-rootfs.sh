@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euxo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux mkfs.ext4
 # Minimal ext4 rootfs whose init runs a heartbeat: a counter kept ONLY in guest
 # RAM (tmpfs). After a snapshot/restore migration the counter must continue from
 # where it was -- that is the memory-continuity proof. If memory were lost the

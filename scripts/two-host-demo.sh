@@ -5,6 +5,8 @@
 # hosts). A collector measures the client-observed blackout; the orchestrator
 # measures the control-plane cutover.
 set -uo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux podman ip
 ROOTFS=$HOME/host-rootfs
 IMAGES=/Users/dylanwong/daedal/kernel/build
 SHARED=/dev/shm/dhost

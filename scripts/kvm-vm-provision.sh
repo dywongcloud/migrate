@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euxo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 mkdir -p ~/pvm ~/fc
 if [ ! -d ~/pvm/host-linux/.git ]; then
   git clone --depth 1 --branch pvm-612 https://github.com/virt-pvm/linux ~/pvm/host-linux

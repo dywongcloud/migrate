@@ -2,6 +2,8 @@
 # Verify attach mode: the orchestrator drives two independently-started
 # Firecracker processes (proxy for two container hosts) via sockets on shared tmpfs.
 set -uo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 sudo chmod 666 /dev/kvm 2>/dev/null
 sudo install -m0755 /Users/dylanwong/daedal/kernel/build/firecracker-aarch64 /usr/local/bin/firecracker
 S=/dev/shm/attach; rm -rf "$S"; mkdir -p "$S"

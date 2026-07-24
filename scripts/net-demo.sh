@@ -4,6 +4,8 @@
 # the guest keeps its IP/MAC. A collector measures the beacon gap = the
 # user-visible blackout, independently of the control-plane timing.
 set -uo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 B=/Users/dylanwong/daedal/kernel/build
 BIN=/Users/dylanwong/daedal/bin/daedald-linux-arm64
 UFFD=$(find ~/fc/firecracker-next/build -name uffd_on_demand_handler -type f -executable | head -1)

@@ -1,5 +1,7 @@
 #!/bin/bash
 set -uo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 B=/Users/dylanwong/daedal/kernel/build
 API=http://127.0.0.1:7031
 

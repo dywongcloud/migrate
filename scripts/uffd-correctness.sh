@@ -2,6 +2,8 @@
 # Correctness check: does a UFFD-backed restored guest CONTINUE executing?
 # Uses a Full snapshot (no diff/merge) to isolate the UFFD-resume behaviour.
 set -uo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 B=/Users/dylanwong/daedal/kernel/build
 FC=/usr/local/bin/firecracker
 UFFD=$(find ~/fc/firecracker-next/build -name uffd_on_demand_handler -type f -executable 2>/dev/null | head -1)

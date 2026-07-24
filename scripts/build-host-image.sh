@@ -4,6 +4,8 @@
 # its shared libraries, busybox, and the orchestrator into a directory that podman
 # runs directly via --rootfs.
 set -euxo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 DST=${1:-$HOME/host-rootfs}
 B=/Users/dylanwong/daedal/kernel/build
 rm -rf "$DST"; mkdir -p "$DST"/{bin,lib,lib64,usr/lib,proc,sys,dev,tmp,shared,etc}

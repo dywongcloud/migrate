@@ -1,5 +1,7 @@
 #!/bin/bash
 set -uo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 RUN=~/pvm-run
 BIN="$RUN/daedald-linux-amd64"
 STATE=/tmp/daedald-pvmcap

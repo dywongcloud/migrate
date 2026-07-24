@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euxo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 # Run INSIDE daedal-kvm AFTER build-host-kernel.sh. The kernel is cross-compiled
 # here; stage its modules + boot artifacts onto the shared ~/daedal mount so
 # install-pvm-kernel.sh (running in daedal-pvm) can install them without a rebuild.

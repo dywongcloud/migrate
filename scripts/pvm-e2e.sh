@@ -1,5 +1,7 @@
 #!/bin/bash
 set -uo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 # Run INSIDE daedal-pvm AFTER rebooting into 6.12.33-pvm and loading kvm-pvm.
 # Reads artifacts from ~/pvm-run (staged onto local disk before reboot, so this
 # does not depend on the ~/daedal mount). Proves the PVM backend: firecracker on

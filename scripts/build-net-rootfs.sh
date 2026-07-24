@@ -4,6 +4,8 @@
 # number). The guest keeps its identity across both hosts, so a collector on the
 # host measures the beacon gap across a migration = the user-visible blackout.
 set -euxo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux mkfs.ext4 gcc
 OUT=/Users/dylanwong/daedal/kernel/build
 SRC=/Users/dylanwong/daedal/images
 GUEST_IP=${GUEST_IP:-172.20.0.2}

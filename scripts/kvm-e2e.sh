@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux
 # Real Firecracker microVM migration on /dev/kvm, driven entirely through the API.
 # Proves memory continuity: the guest keeps a counter in RAM (tmpfs) and prints it
 # to serial; after snapshot/restore the counter must CONTINUE, not reset.

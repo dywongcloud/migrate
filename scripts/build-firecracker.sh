@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euxo pipefail
+. "$(dirname "$0")/lib/guard.sh"
+require_linux cargo
 SRC=~/fc/firecracker-next
 ARCH_TARGET="$1"   # x86_64-unknown-linux-gnu | aarch64-unknown-linux-gnu
 OUTNAME="$2"
