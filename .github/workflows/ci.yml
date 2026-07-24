@@ -1,0 +1,30 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: gofmt
+        working-directory: api
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: go vet
+        working-directory: api
+        run: go vet ./...
+      - name: build linux/amd64
+        working-directory: api
+        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/daedald-amd64 ./cmd/daedald
+      - name: build linux/arm64
+        working-directory: api
+        run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/daedald-arm64 ./cmd/daedald
+      - name: build native (mock backend runtime)
+        working-directory: api
+        run: go build -o /tmp/daedald ./cmd/daedald
+      - name: mock-backend e2e + p99 assertion
+        run: bash bench/ci-verify.sh

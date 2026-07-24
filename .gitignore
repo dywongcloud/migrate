@@ -1,0 +1,10 @@
+.deps/
+.gm/
+bench/results/*.json
+images/build/
+kernel/build/
+*.bin
+*.img
+*.snap
+*.mem
+bin/

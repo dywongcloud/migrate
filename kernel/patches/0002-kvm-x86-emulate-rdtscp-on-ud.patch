@@ -1,0 +1,52 @@
+From: Dylan Wong <dywong@global.tencent.com>
+Date: Sat, 27 Jun 2026 06:13:50 +0800
+Subject: [RFC PATCH 2/4] KVM: x86: emulate RDTSCP on #UD
+
+The instruction emulator had only a privilege-check DIP entry for RDTSCP and no
+executor, so it could not emulate the instruction on a host where it is
+unavailable. Add em_rdtscp() (TSC into EDX:EAX, IA32_TSC_AUX into ECX, modelled
+on em_rdtsc()) and flag the opcode EmulateOnUD so KVM emulates it precisely when
+the host cannot execute it. This is used by PVM (patch 3) to keep the guest vdso
+getcpu working on hosts that mask RDTSCP.
+
+Signed-off-by: Dylan Wong <dywong@global.tencent.com>
+---
+ arch/x86/kvm/emulate.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/emulate.c b/arch/x86/kvm/emulate.c
+index e72aed25d..e2b1d4870 100644
+--- a/arch/x86/kvm/emulate.c
++++ b/arch/x86/kvm/emulate.c
+@@ -3219,6 +3219,18 @@ static int em_rdtsc(struct x86_emulate_ctxt *ctxt)
+ 	return X86EMUL_CONTINUE;
+ }
+ 
++static int em_rdtscp(struct x86_emulate_ctxt *ctxt)
++{
++	u64 tsc = 0, tsc_aux = 0;
++
++	ctxt->ops->get_msr(ctxt, MSR_IA32_TSC, &tsc);
++	*reg_write(ctxt, VCPU_REGS_RAX) = (u32)tsc;
++	*reg_write(ctxt, VCPU_REGS_RDX) = tsc >> 32;
++	ctxt->ops->get_msr(ctxt, MSR_TSC_AUX, &tsc_aux);
++	*reg_write(ctxt, VCPU_REGS_RCX) = (u32)tsc_aux;
++	return X86EMUL_CONTINUE;
++}
++
+ static int em_rdpmc(struct x86_emulate_ctxt *ctxt)
+ {
+ 	u64 pmc;
+@@ -4012,7 +4024,7 @@ static const struct opcode group7_rm3[] = {
+ 
+ static const struct opcode group7_rm7[] = {
+ 	N,
+-	DIP(SrcNone, rdtscp, check_rdtsc),
++	IIP(ImplicitOps | EmulateOnUD, em_rdtscp, rdtscp, check_rdtsc),
+ 	N, N, N, N, N, N,
+ };
+ 
+-- 
+2.52.0
+
+

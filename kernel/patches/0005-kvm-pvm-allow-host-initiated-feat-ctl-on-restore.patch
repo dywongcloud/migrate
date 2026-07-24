@@ -1,0 +1,42 @@
+From: Daedal <daedal@localhost>
+Date: Thu, 23 Jul 2026 17:22:00 -0700
+Subject: [PATCH] KVM: x86/PVM: allow host-initiated MSR_IA32_FEAT_CTL writes
+
+pvm_set_msr() rejects MSR_IA32_FEAT_CTL outright on non-Intel hosts
+(`if (!is_intel || ...) return 1`). kvm-pvm nonetheless advertises the MSR
+in KVM_GET_MSR_INDEX_LIST, so a VMM (Firecracker) that snapshots the full
+supported-MSR set and replays it on restore issues KVM_SET_MSRS including
+FEAT_CTL as a host-initiated write. On a non-Intel host (e.g. a qemu-TCG
+"AMD" vCPU) the write is rejected, KVM_SET_MSRS returns a partial count, and
+Firecracker's snapshot restore fails with:
+
+  Failed to restore vCPUs: Failed to set all KVM MSRs for this vCPU.
+  Only a partial write was done.
+
+Mainline KVM validates such control MSRs only for guest-originated writes and
+trusts host-initiated (VMM) writes. Gate the validity check on
+!msr_info->host_initiated so snapshot restore succeeds while guest writes are
+still validated. This makes PVM microVM live-migration work; without it the
+base snapshot/boot succeed but every restore fails.
+
+Signed-off-by: Daedal <daedal@localhost>
+---
+ arch/x86/kvm/pvm/pvm.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/pvm/pvm.c b/arch/x86/kvm/pvm/pvm.c
+index 71cf60159..8a1b2c3d4 100644
+--- a/arch/x86/kvm/pvm/pvm.c
++++ b/arch/x86/kvm/pvm/pvm.c
+@@ -1059,7 +1059,8 @@ static int pvm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		/* It is ignored now. */
+ 		break;
+ 	case MSR_IA32_FEAT_CTL:
+-		if (!is_intel || !is_pvm_feature_control_msr_valid(pvm, msr_info))
++		if (!msr_info->host_initiated &&
++		    (!is_intel || !is_pvm_feature_control_msr_valid(pvm, msr_info)))
+ 			return 1;
+ 		pvm->msr_ia32_feature_control = data;
+ 		break;
+--
+2.43.0

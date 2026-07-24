@@ -1,0 +1,30 @@
+minimumLimaVersion: "1.0.0"
+vmType: qemu
+arch: x86_64
+
+cpus: 4
+memory: 4GiB
+disk: 60GiB
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: x86_64
+
+mounts:
+  - location: "~/daedal"
+    writable: true
+  - location: "/tmp/lima"
+    writable: true
+
+containerd:
+  system: false
+  user: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y jq curl git kmod initramfs-tools grub-pc-bin

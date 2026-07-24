@@ -1,0 +1,20 @@
+[Unit]
+Description=daedald microVM migration daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/daedald serve --config /etc/daedald/config.json
+Restart=on-failure
+RestartSec=2
+StateDirectory=daedald
+LimitNOFILE=65536
+# Firecracker (spawned as a child) opens /dev/kvm — grant the group that owns it
+# so the child inherits access without world-writable /dev/kvm.
+SupplementaryGroups=kvm
+AmbientCapabilities=CAP_NET_ADMIN
+DeviceAllow=/dev/kvm rw
+
+[Install]
+WantedBy=multi-user.target

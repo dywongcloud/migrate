@@ -1,0 +1,61 @@
+From: Dylan Wong <dywong@global.tencent.com>
+Date: Sat, 27 Jun 2026 06:13:50 +0800
+Subject: [RFC PATCH 4/4] x86/pvm: read/write guest FS base via hypercall
+ without FSGSBASE
+
+The PVM guest paravirt MSR helpers use RD/WRFSBASE unconditionally for
+MSR_FS_BASE, so a PVM guest #UD-storms in early boot on a host that lacks
+FSGSBASE (RIP: pvm_write_msr, "f3 48 0f ae d1" = WRFSBASE). Gate the FSGSBASE
+instructions on cpu_feature_enabled(X86_FEATURE_FSGSBASE) and otherwise defer
+the FS base read/write to the hypervisor via PVM_HC_RD/WRMSR -- the mechanism the
+MSR_GS_BASE case already uses.
+
+Signed-off-by: Dylan Wong <dywong@global.tencent.com>
+---
+ arch/x86/kernel/pvm.c | 16 ++++++++++++----
+ 1 file changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kernel/pvm.c b/arch/x86/kernel/pvm.c
+index 3642ccf05..d54a6d6a3 100644
+--- a/arch/x86/kernel/pvm.c
++++ b/arch/x86/kernel/pvm.c
+@@ -94,7 +94,10 @@ static unsigned long long pvm_read_msr_safe(unsigned int msr, int *err)
+ 	switch (msr) {
+ 	case MSR_FS_BASE:
+ 		*err = 0;
+-		return rdfsbase();
++		if (cpu_feature_enabled(X86_FEATURE_FSGSBASE))
++			return rdfsbase();
++		/* No FSGSBASE: defer the FS base read to the hypervisor. */
++		return pvm_hypercall1(PVM_HC_RDMSR, msr);
+ 	case MSR_KERNEL_GS_BASE:
+ 		*err = 0;
+ 		return this_cpu_read(pvm_vcpu_struct.user_gsbase);
+@@ -107,7 +110,10 @@ static unsigned long long pvm_read_msr(unsigned int msr)
+ {
+ 	switch (msr) {
+ 	case MSR_FS_BASE:
+-		return rdfsbase();
++		if (cpu_feature_enabled(X86_FEATURE_FSGSBASE))
++			return rdfsbase();
++		/* No FSGSBASE: defer the FS base read to the hypervisor. */
++		return pvm_hypercall1(PVM_HC_RDMSR, msr);
+ 	case MSR_KERNEL_GS_BASE:
+ 		return this_cpu_read(pvm_vcpu_struct.user_gsbase);
+ 	default:
+@@ -122,7 +128,11 @@ static int notrace pvm_write_msr_safe(unsigned int msr, u32 low, u32 high)
+ 
+ 	switch (msr) {
+ 	case MSR_FS_BASE:
+-		wrfsbase(base);
++		if (cpu_feature_enabled(X86_FEATURE_FSGSBASE))
++			wrfsbase(base);
++		else
++			/* No FSGSBASE: defer the FS base write to the hypervisor. */
++			pvm_hypercall2(PVM_HC_WRMSR, msr, base);
+ 		return 0;
+ 	case MSR_KERNEL_GS_BASE:
+ 		this_cpu_write(pvm_vcpu_struct.user_gsbase, base);
+-- 
+2.52.0
+

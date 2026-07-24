@@ -1,0 +1,179 @@
+openapi: "3.0.3"
+info:
+  title: daedald migration API
+  version: "1.0"
+  description: >
+    VM lifecycle and live-migration API for Firecracker microVMs on KVM and
+    PVM (pagetable virtual machine) backends. Migration p99 target: < 20s.
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      responses:
+        "200": { description: ok }
+  /v1/capabilities:
+    get:
+      summary: Host capabilities and detected default backend
+      responses:
+        "200":
+          description: capabilities
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capabilities" }
+  /spec:
+    get:
+      summary: This OpenAPI document
+      responses:
+        "200": { description: yaml spec }
+  /v1/vms:
+    get:
+      summary: List VMs
+      responses:
+        "200": { description: array of VM }
+    post:
+      summary: Create and boot a microVM
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateVM" }
+      responses:
+        "201": { description: VM created }
+        "400": { description: invalid spec or backend }
+        "500": { description: boot failure }
+  /v1/vms/{id}:
+    get:
+      summary: Get VM
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: VM }
+        "404": { description: not found }
+    delete:
+      summary: Destroy VM
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: deleted }
+        "409": { description: mid-migration }
+  /v1/vms/{id}/actions:
+    post:
+      summary: Pause or resume
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type: { type: string, enum: [pause, resume] }
+      responses:
+        "200": { description: VM }
+        "409": { description: wrong state }
+  /v1/vms/{id}/migrate:
+    post:
+      summary: Migrate the VM (local process-to-process or to a remote peer daemon)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MigrateRequest" }
+      responses:
+        "200": { description: Migration record (succeeded) }
+        "409": { description: not running / already migrating }
+        "500": { description: Migration record (failed, rolled back) }
+  /v1/vms/{id}/console:
+    get:
+      summary: Tail of the VM serial console log
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: text }
+  /v1/migrations:
+    get:
+      summary: List migrations
+      responses:
+        "200": { description: array of Migration }
+  /v1/migrations/{id}:
+    get:
+      summary: Get migration
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Migration }
+        "404": { description: not found }
+  /v1/metrics:
+    get:
+      summary: Migration duration histogram and p50/p95/p99
+      responses:
+        "200":
+          description: summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MetricsSummary" }
+  /v1/peer/migrations:
+    post:
+      summary: "Peer protocol: init incoming migration"
+      responses:
+        "201": { description: token }
+  /v1/peer/migrations/{tok}/files/{name}:
+    put:
+      summary: "Peer protocol: stream snapshot/disk file (sha256-verified)"
+      parameters:
+        - { name: tok, in: path, required: true, schema: { type: string } }
+        - { name: name, in: path, required: true, schema: { type: string, enum: [base.mem, base.vmstate, diff.mem, diff.vmstate, rootfs.ext4] } }
+      responses:
+        "200": { description: received }
+  /v1/peer/migrations/{tok}/complete:
+    post:
+      summary: "Peer protocol: merge diff, restore, resume"
+      parameters: [{ name: tok, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: dest vm id }
+  /v1/peer/migrations/{tok}:
+    delete:
+      summary: "Peer protocol: abort and clean up"
+      parameters: [{ name: tok, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: aborted }
+components:
+  schemas:
+    Capabilities:
+      type: object
+      properties:
+        arch: { type: string }
+        dev_kvm: { type: boolean }
+        kvm_pvm_module: { type: boolean }
+        backends: { type: array, items: { type: string } }
+        default_backend: { type: string }
+    CreateVM:
+      type: object
+      properties:
+        name: { type: string }
+        backend: { type: string, enum: [auto, kvm, pvm, mock] }
+        vcpus: { type: integer, minimum: 1, maximum: 32 }
+        mem_mib: { type: integer, minimum: 32, maximum: 32768 }
+        kernel_path: { type: string }
+        rootfs_path: { type: string }
+        boot_args: { type: string }
+        track_dirty_pages: { type: boolean }
+    MigrateRequest:
+      type: object
+      properties:
+        target:
+          type: string
+          description: '"local" or peer base URL, e.g. "http://192.168.5.2:7031"'
+        mode: { type: string, enum: [cold, precopy] }
+        transfer_disk: { type: boolean }
+    MetricsSummary:
+      type: object
+      properties:
+        count: { type: integer }
+        ok_count: { type: integer }
+        fail_count: { type: integer }
+        total_ms:
+          type: object
+          properties:
+            p50: { type: number }
+            p95: { type: number }
+            p99: { type: number }
+            max: { type: number }
+            min: { type: number }
+        downtime_ms: { type: object }
+        by_backend_total_ms: { type: object }
+        histogram_total_ms: { type: object }

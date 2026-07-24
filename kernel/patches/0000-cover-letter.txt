@@ -1,0 +1,136 @@
+From:         Dylan Wong <dywong-AT-global.tencent.com>
+To:         linux-kernel-AT-vger.kernel.org
+Subject:         [RFC PATCH 0/4] KVM: x86/PVM: run the switcher and guest without FSGSBASE/RDTSCP
+Date:         Sat, 27 Jun 2026 06:13:50 +0800
+Message-ID:         <20260627061350.33643-1-dywong@global.tencent.com>
+Cc:         Lai Jiangshan <jiangshanlai-AT-gmail.com>, Hou Wenlong <houwenlong.hwl-AT-antgroup.com>, Sean Christopherson <seanjc-AT-google.com>, Paolo Bonzini <pbonzini-AT-redhat.com>, Thomas Gleixner <tglx-AT-linutronix.de>, Borislav Petkov <bp-AT-alien8.de>, Ingo Molnar <mingo-AT-redhat.com>, x86-AT-kernel.org, kvm-AT-vger.kernel.org
+Archive-link:         Article
+
+From: Dylan Wong <dywong@global.tencent.com>
+
+Hello,
+
+This series lets the Pagetable-based Virtual Machine (PVM) hypervisor [1] run
+on hosts whose CPUs do not expose FSGSBASE and/or RDTSCP -- in particular on
+commodity cloud instances whose virtual CPUs mask those features out of guest
+CPUID for live-migration portability. The motivating target is a Tencent Cloud
+CVM (Intel Xeon E5-2600 v4, Rocky Linux 10) on which both features are hidden:
+
+  $ grep -o -e fsgsbase -e rdtscp /proc/cpuinfo
+  $            # nothing -- both masked by the L0 hypervisor
+
+On such a host the goal is to run Firecracker microVMs with no hardware
+virtualization at all (no VT-x/AMD-V/nested-virt, no host /dev/kvm), using PVM
+to provide /dev/kvm in software.
+
+Today PVM hard-refuses to load on these hosts:
+
+  /* arch/x86/kvm/pvm/pvm.c, hardware_cap_check() */
+  if (!boot_cpu_has(X86_FEATURE_FSGSBASE)) {
+          pr_warn("FSGSBASE is required per PVM specification.\n");
+          return -EOPNOTSUPP;
+  }
+  if (!boot_cpu_has(X86_FEATURE_RDTSCP)) {
+          pr_warn("RDTSCP is required to support for getcpu in guest vdso.\n");
+          return -EOPNOTSUPP;
+  }
+
+Neither feature can simply be un-masked. Writing CR4.FSGSBASE from the guest is
+#GP-rejected by the L0 (KVM validates guest CR4 against guest CPUID), and RDTSCP
+genuinely #UDs -- the L0 does not enable the instruction in the VMCS, so it is
+not merely a hidden CPUID bit. They have to be worked around, and there are
+three distinct places PVM depends on them.
+
+Design
+======
+
+1. The host switcher (FSGSBASE). The mode-switch trampoline in
+   arch/x86/entry/entry_64_switcher.S runs in host ring 0 and uses
+   RD/WRGSBASE to move the guest GS base across the umod<->smod boundary. In
+   ring 0 the same effect is available through SWAPGS + MSR_KERNEL_GS_BASE.
+   Patch 1 wraps each direct-switch sequence in an ALTERNATIVE keyed on
+   X86_FEATURE_FSGSBASE -- the fast RD/WRGSBASE path is kept verbatim (the
+   leading jmp is patched to NOPs when the feature is present, so there is zero
+   added cost on capable hosts), and an MSR-based fallback runs otherwise. The
+   fallback differs from the paranoid_entry idiom in one respect: these paths
+   pass the guest GPRs straight through, and RD/WRMSR clobber RAX/RCX/RDX, so
+   RAX (syscall nr / return value) and RDX (arg3) are saved and restored around
+   the MSR access. Both fallbacks reproduce the exact architectural end state of
+   the fast path (active gsbase == smod/user gsbase, MSR_KERNEL_GS_BASE == host
+   gsbase).
+
+2. Guest RDTSCP (host emulation). PVM points the guest's vdso getcpu at RDTSCP
+   (vdso_read_cpunode(), via an X86_FEATURE_KVM_PVM_GUEST alternative) because a
+   PVM guest's GDT is hypervisor-managed and LSL-from-GDT does not work. On a
+   host without RDTSCP the guest cannot execute it. Patches 2 and 3 trap-and-
+   emulate it: KVM's emulator gains an em_rdtscp() executor (it previously had
+   only a privilege-check DIP entry for RDTSCP) flagged EmulateOnUD, and PVM
+   routes guest *user-mode* #UD through handle_ud() instead of reflecting it
+   straight to the guest (stock VMX/SVM already handle all guest #UD that way).
+   The two hardware_cap_check() gates become informational pr_info()s.
+
+3. Guest FSGSBASE. The PVM *guest* kernel is a separate binary and uses
+   RD/WRFSBASE unconditionally for MSR_FS_BASE in its paravirt MSR helpers,
+   because PVM guarantees the feature to its guests. On a host without FSGSBASE
+   the guest #UD-storms in early boot (RIP: pvm_write_msr, "f3 48 0f ae d1" =
+   WRFSBASE). Patch 4 gates that use on cpu_feature_enabled(X86_FEATURE_FSGSBASE)
+   and otherwise defers to the existing PVM_HC_RD/WRMSR hypercall -- the same
+   mechanism the MSR_GS_BASE case already uses.
+
+None of the changes alter behaviour on a feature-complete host: the ALTERNATIVE,
+the EmulateOnUD flag, and the runtime cpu_feature_enabled() check all keep the
+native fast path where the hardware supports it.
+
+Testing
+=======
+
+The switcher fallback was first validated as a state machine over 3,000,000
+randomized inputs (including non-canonical addresses): the MSR fallback is
+bit-identical to the FSGSBASE fast path and preserves the guest RAX/RDX, while a
+deliberately broken variant fails the same test. objtool validated the patched
+switcher object with no new warnings and the .altinstructions section decoded to
+exactly two FSGSBASE-gated entries.
+
+On the target host (kernel booted with pti=off), kvm-pvm now loads, creates
+/dev/kvm, and Firecracker boots a full Ubuntu 24.04 guest to a shell with zero
+"invalid opcode" oopses. RDTSCP emulation was confirmed by executing the raw
+RDTSCP opcode from an mmap'd page inside the guest (sched_getcpu() alone is not a
+proof: modern glibc reads the rseq cache and never executes the instruction). It
+returned a valid TSC with no SIGILL.
+
+Performance (target host; native = same box, for reference):
+
+  workload                native        PVM guest     ratio
+  CPU compute (loop)      0.957 s       1.113 s       1.16x
+  getpid syscall          445 ns        759 ns        1.7x
+  fork+exec x3000         1.53 s        5.59 s        3.6x
+  fork x3000              0.81 s        3.48 s        4.3x
+  raw RDTSC (native)      ~native       ~native       1x
+  raw RDTSCP (emulated)   n/a           ~3.35 us      trap
+  microVM boot            --            1.3 s         --
+
+Compute is near native; fork/syscall-heavy work pays PVM's software-switcher and
+software-MMU tax (inherent to PVM, mildly amplified by the MSR-gsbase fallback
+and the FS-base hypercall on context switches). The RDTSCP emulation is ~3 us per
+call but a cold path in practice (glibc getcpu uses rseq). A host that exposes
+both features natively avoids the amplification and the emulation entirely.
+
+  arch/x86/entry/entry_64_switcher.S | 81 +++++++++++++++++++++++++++++++++++---
+  arch/x86/kvm/emulate.c             | 14 ++++++-
+  arch/x86/kvm/pvm/pvm.c             | 26 ++++++------
+  arch/x86/kernel/pvm.c              | 16 ++++++--
+  4 files changed, 115 insertions(+), 22 deletions(-)
+
+[1] KVM: x86/PVM: Introduce a new hypervisor -- https://lwn.net/Articles/963718/
+    PVM tree: https://github.com/virt-pvm/linux (pvm-612, Linux 6.12.33)
+
+Dylan Wong (4):
+  x86/entry: PVM switcher gsbase switch without FSGSBASE
+  KVM: x86: emulate RDTSCP on #UD
+  KVM: x86/PVM: soft-gate FSGSBASE/RDTSCP and emulate guest user-mode #UD
+  x86/pvm: read/write guest FS base via hypercall without FSGSBASE
+
+--
+2.52.0
+
+

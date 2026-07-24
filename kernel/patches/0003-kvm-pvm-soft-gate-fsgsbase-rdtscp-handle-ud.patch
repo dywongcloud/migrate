@@ -1,0 +1,69 @@
+From: Dylan Wong <dywong@global.tencent.com>
+Date: Sat, 27 Jun 2026 06:13:50 +0800
+Subject: [RFC PATCH 3/4] KVM: x86/PVM: soft-gate FSGSBASE/RDTSCP and emulate
+ guest user-mode #UD
+
+With the switcher (patch 1) and the emulator (patch 2) handling the absence of
+FSGSBASE and RDTSCP, drop the two hard -EOPNOTSUPP gates in
+hardware_cap_check() to informational pr_info()s.
+
+The guest vdso getcpu executes RDTSCP in guest *user* mode, but PVM reflects
+user-mode #UD straight back to the guest without consulting the emulator. Route
+both supervisor- and user-mode #UD through handle_ud(), which emulates the
+EmulateOnUD allowlist (now including RDTSCP) and reflects #UD back to the guest
+for everything else -- the same behaviour stock VMX/SVM already implement for all
+guest #UD.
+
+Signed-off-by: Dylan Wong <dywong@global.tencent.com>
+---
+ arch/x86/kvm/pvm/pvm.c | 26 +++++++++++++-------------
+ 1 file changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/arch/x86/kvm/pvm/pvm.c b/arch/x86/kvm/pvm/pvm.c
+index c069e5a9a..78f614a91 100644
+--- a/arch/x86/kvm/pvm/pvm.c
++++ b/arch/x86/kvm/pvm/pvm.c
+@@ -2159,10 +2159,14 @@ static int handle_exit_exception(struct kvm_vcpu *vcpu)
+ 		}
+ 		return 1;
+ 	case UD_VECTOR:
+-		if (!is_smod(pvm)) {
+-			kvm_queue_exception(vcpu, UD_VECTOR);
+-			return 1;
+-		}
++		/*
++		 * Route both supervisor- and user-mode #UD through handle_ud().
++		 * It emulates only the EmulateOnUD allowlist -- notably RDTSCP,
++		 * so the guest vdso getcpu keeps working on hosts where the CPU
++		 * does not expose RDTSCP -- and reflects #UD back to the guest
++		 * for everything else, preserving the previous behaviour. (Stock
++		 * VMX/SVM likewise handle all guest #UD via handle_ud().)
++		 */
+ 		return handle_ud(vcpu);
+ 	case DB_VECTOR:
+ 		return handle_exit_debug(vcpu);
+@@ -3136,14 +3140,12 @@ static int __init hardware_cap_check(void)
+ 		pr_warn("Support for host FRED is not included yet.\n");
+ 		return -EOPNOTSUPP;
+ 	}
+-	if (!boot_cpu_has(X86_FEATURE_FSGSBASE)) {
+-		pr_warn("FSGSBASE is required per PVM specification.\n");
+-		return -EOPNOTSUPP;
+-	}
+-	if (!boot_cpu_has(X86_FEATURE_RDTSCP)) {
+-		pr_warn("RDTSCP is required to support for getcpu in guest vdso.\n");
+-		return -EOPNOTSUPP;
+-	}
++	if (!boot_cpu_has(X86_FEATURE_FSGSBASE))
++		pr_info("FSGSBASE not available; the switcher will use the slower "
++			"MSR-based gsbase switching fallback.\n");
++	if (!boot_cpu_has(X86_FEATURE_RDTSCP))
++		pr_info("RDTSCP not available; guest vdso getcpu RDTSCP will be "
++			"trapped and emulated (slower).\n");
+ 	if (!boot_cpu_has(X86_FEATURE_CX16)) {
+ 		pr_warn("CMPXCHG16B is required for guest.\n");
+ 		return -EOPNOTSUPP;
+-- 
+2.52.0
+
+
