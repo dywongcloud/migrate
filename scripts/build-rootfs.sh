@@ -2,7 +2,7 @@
 set -euxo pipefail
 # Minimal ext4 rootfs whose init runs a heartbeat: a counter kept ONLY in guest
 # RAM (tmpfs). After a snapshot/restore migration the counter must continue from
-# where it was — that is the memory-continuity proof. If memory were lost the
+# where it was -- that is the memory-continuity proof. If memory were lost the
 # guest would reboot and the counter would restart at 0.
 OUT=/Users/dylanwong/daedal/kernel/build
 mkdir -p "$OUT"
@@ -36,7 +36,7 @@ chmod +x "$ROOT/init"
 IMG="$OUT/rootfs.ext4"
 rm -f "$IMG"
 dd if=/dev/zero of="$IMG" bs=1M count=48 status=none
-mkfs.ext4 -q -F -L rootfs "$IMG"
+mkfs.ext4 -q -F -O ^has_journal -L rootfs "$IMG"
 MNT=$(mktemp -d)
 sudo mount -o loop "$IMG" "$MNT"
 sudo cp -a "$ROOT"/. "$MNT"/

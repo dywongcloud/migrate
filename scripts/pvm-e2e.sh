@@ -13,7 +13,7 @@ echo "== kernel + PVM module state =="
 uname -r
 sudo modprobe kvm-pvm 2>&1 || true
 lsmod | grep -E 'kvm_pvm|kvm' || true
-ls -l /dev/kvm || { echo "NO /dev/kvm — kvm-pvm not loaded"; exit 1; }
+ls -l /dev/kvm || { echo "NO /dev/kvm -- kvm-pvm not loaded"; exit 1; }
 echo "-- dmesg PVM / FSGSBASE / RDTSCP lines --"
 sudo dmesg | grep -iE 'pvm|fsgsbase|rdtscp' | tail -14 || true
 

@@ -109,6 +109,14 @@ func main() {
 		benchMain(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "livemigrate" {
+		if len(os.Args) > 2 && os.Args[2] == "serve" {
+			liveMigrateServe(os.Args[3:])
+			return
+		}
+		liveMigrateMain(os.Args[2:])
+		return
+	}
 	args := os.Args[1:]
 	if len(args) > 0 && args[0] == "serve" {
 		args = args[1:]

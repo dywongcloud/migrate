@@ -1,179 +1,97 @@
-# daedal — sub-20s Firecracker microVM migration on KVM and PVM
+# daedal -- Firecracker live VM migration with <= 30 ms blackout
 
-`daedal` is a migration API for [Firecracker](https://github.com/firecracker-microvm/firecracker)
-microVMs that live-migrates a running guest — memory, device state, vCPU state —
-from one VMM process to another (locally or across hosts) with a **p99 total
-migration time under 20 seconds**.
+`daedal` live-migrates a running [Firecracker](https://github.com/firecracker-microvm/firecracker)
+microVM from one host to another with a **guest blackout (the time the guest is
+executing on neither host) in the single-digit milliseconds**, while a workload
+running inside the guest keeps serving without a dropped connection.
 
-It runs on two backends from a single binary:
+Measured, end to end, between two container hosts:
 
-- **KVM** — ordinary hardware-assisted virtualization (`/dev/kvm`).
-- **PVM** — [Pagetable-based Virtual Machine](https://github.com/virt-pvm/linux),
-  a software hypervisor that provides `/dev/kvm` **without** VT-x/AMD-V or nested
-  virtualization, using the [DecOperations/firecracker-next](https://github.com/DecOperations/firecracker-next)
-  fork plus the [`pvm-no-fsgsbase-rdtscp`](https://github.com/dywongcloud/pvm-no-fsgsbase-rdtscp)
-  kernel series so it works even on cloud CPUs that mask `FSGSBASE`/`RDTSCP`.
+| Metric | Value |
+|--------|-------|
+| Guest blackout at cutover (control plane) | **~5 ms** (p99 ~10 ms over 20 runs) |
+| Client-observed gap at the handoff | **0 ms** |
+| Packets lost across the migration | **0** |
+| Blackout budget | 30 ms |
 
-The starting point is `firecracker-next`; migration is orchestrated on top of its
-snapshot API (`/snapshot/create` Full+Diff, `/snapshot/load`, `/vm` pause/resume)
-because Firecracker ships no migrate endpoint of its own.
+The guest keeps its IP and MAC across the move, so an in-flight UDP beacon it is
+sending loses zero packets -- the connection never notices the host switch.
 
-## What migration does
+## How the blackout stays small
 
-Firecracker has no live "migrate" call. `daedald` builds one out of the snapshot
-primitives:
-
-```
-precopy (default, for remote):
-  pause → Full snapshot → resume        (base memory captured; guest keeps running)
-  stream base memory to dest            (NOT counted as downtime — guest is live)
-  pause → Diff snapshot                 (only pages dirtied since base)
-  stream diff + merge onto base at dest
-  restore + resume at dest              (downtime = final pause → resume)
-
-cold (for local / tiny guests):
-  pause → Full snapshot → restore + resume
-```
-
-`track_dirty_pages` (Firecracker's dirty-bitmap) is what makes the diff small, so
-the final pause is short. **Total** time is dominated by the base transfer (guest
-running); **downtime** is only the final diff+restore. The API reports both.
-
-## Architecture
+Firecracker has no live-migration call, and its snapshot pauses the VM to
+serialize memory -- so a naive "snapshot, copy, restore" pays the whole
+memory-copy cost as downtime. The trick is to keep memory *out of the blackout
+window*:
 
 ```
-                 daedald (Go, one static binary, GOARCH amd64|arm64)
-   ┌─────────────────────────────────────────────────────────────────┐
-   │ HTTP API  ── vms CRUD ── /migrate ── /metrics(p99) ── /peer/*     │
-   │                                                                   │
-   │ store        migrate.Manager           metrics.Recorder           │
-   │ (VM state    (orchestration,           (per-migration durations,  │
-   │  machine)     rollback, peer proto)     p50/p95/p99, histogram)   │
-   │                    │                                              │
-   │              vmm.Backend (interface)                              │
-   │              ├── FirecrackerBackend  (spawn fc, unix-socket API)  │
-   │              └── MockBackend         (CI, no KVM/PVM needed)      │
-   └───────────────────────────┬───────────────────────────────────────┘
-                                │  same binary, backend chosen by
-                                │  DetectCapabilities(/dev/kvm, /proc/modules)
-             ┌──────────────────┴──────────────────┐
-        KVM backend                           PVM backend
-     /dev/kvm (hardware)                  /dev/kvm (kvm-pvm.ko, software)
-     firecracker-aarch64                  firecracker-x86_64
-     guest: FC CI vmlinux                 guest: vmlinux-pvmguest
+pre-copy (guest live on the source):
+  Full snapshot -> base memory image on a tmpfs both hosts share
+  refresh it with Diff snapshots while the guest keeps running
+
+cutover (the blackout -- guest paused on neither-yet-both hosts):
+  pause source -> tiny final Diff (only pages dirtied since the last refresh)
+  destination restores vCPU/device state and resumes
+  guest memory is mmap'd from the shared image and faults in lazily AFTER resume
+  the guest NIC is re-homed onto the destination host's tap (network_overrides)
 ```
 
-The backend is **not** a fork in the code — `DetectCapabilities` probes `/dev/kvm`
-and `/proc/modules` for `kvm_pvm`, picks a default, and the same orchestration path
-drives both. KVM vs PVM differ only in which `firecracker` binary and guest kernel
-a backend config points at.
+Because the memory image is already on shared storage and the destination maps it
+lazily (a `File` backend via the kernel page cache, or `Uffd` for a true
+post-copy over a network), **no memory is copied during the blackout**. The
+blackout is just: final tiny diff + restore vCPU/device state + resume, measured
+at ~5 ms. Every guest pause in the whole migration -- including the one-time
+full-memory pre-copy snapshot -- stays inside 30 ms for a small guest.
 
-## Repository layout
+Details and the primitives used are in `docs/livemigrate.md`.
+
+## Layout
 
 | Path | What |
 |------|------|
-| `api/` | The `daedald` daemon (Go). `cmd/daedald` = serve + bench; `internal/{vmm,store,migrate,metrics,server}`. |
-| `lima/` | Lima VM templates: `daedal-kvm.yaml` (vz, nested virt), `daedal-pvm.yaml` (qemu/TCG x86_64). |
-| `kernel/patches/` | The 4-patch `no-FSGSBASE/RDTSCP` RFC series, decoded and apply-clean on `virt-pvm/linux` `pvm-612`. |
-| `scripts/` | Kernel/firecracker/rootfs build scripts, run inside the Lima VMs. |
-| `deploy/` | `systemd` unit + example backend configs. |
-| `bench/` | `ci-verify.sh` (mock e2e + p99 assertion) and benchmark reports. |
-| `.github/workflows/ci.yml` | Build both arches + mock-backend e2e on every push. |
+| `api/internal/livemigrate/` | the migration orchestrator (pre-copy, cutover, blackout timing) |
+| `api/cmd/daedald/livemigrate*.go` | CLI + REST API (`daedald livemigrate`, `daedald livemigrate serve`) |
+| `images/` | the in-guest UDP beacon (`beacon.c`) and the host-side collector/analyzer |
+| `scripts/` | build scripts, the single-host and two-container demos, the p99 harness |
+| `bench/` | measured results (`RESULTS-livemigrate.md`) |
+| `docs/DEMO.md` | the <=120s video walkthrough |
+| `AI-USAGE.md` | how AI was used (disclosed, per the challenge policy) |
 
-## From-scratch setup on macOS (Apple Silicon)
+The repo also contains an earlier snapshot-based migration service (`daedald
+serve`, `internal/migrate`) and a PVM/no-hardware-virt kernel path; those are the
+foundation this live-migration work builds on.
 
-Everything runs inside Lima VMs because Firecracker needs a Linux host. The user's
-own Lima VMs are never touched; `daedal` uses dedicated `daedal-kvm` / `daedal-pvm`
-instances.
+## Run it
 
-### 0. Host prerequisites
-
-```sh
-brew install lima qemu lima-additional-guestagents go
-```
-
-`lima-additional-guestagents` is required for the x86_64 (qemu/TCG) VM — without it
-`limactl start` on an x86_64 template fails with "guest agent binary could not be
-found for Linux-x86_64".
-
-### 1. Build the daemon
+Everything runs inside a Lima VM that provides nested KVM on macOS (`daedal-kvm`).
 
 ```sh
-cd api
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ../bin/daedald-linux-arm64 ./cmd/daedald
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../bin/daedald-linux-amd64 ./cmd/daedald
-```
-
-### 2. KVM backend (native, fast)
-
-```sh
-limactl start --name=daedal-kvm lima/daedal-kvm.yaml     # vz + nestedVirtualization:true
-limactl shell daedal-kvm -- ls -l /dev/kvm               # must exist
-
-# in the VM:
-bash scripts/build-firecracker.sh aarch64-unknown-linux-gnu firecracker-aarch64 4
-curl -fsSL -o kernel/build/vmlinux-aarch64 \
-  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.12/aarch64/vmlinux-6.1.128
+# in the VM: build firecracker + the uffd handler, fetch the guest kernel,
+# build the rootfs and the self-contained container "host" image
 bash scripts/build-rootfs.sh
+bash scripts/build-net-rootfs.sh          # networked guest with the UDP beacon
+bash scripts/build-host-image.sh          # container rootfs (no registry pull)
+
+# single-host mechanism + p99 (two Firecracker processes)
+bash scripts/blackout-p99.sh 20 32
+
+# the headline: two container hosts, live migration, client-observed blackout
+bash scripts/two-host-demo.sh
 ```
 
-Then deploy `bin/daedald-linux-arm64`, `deploy/config.kvm.json`, and
-`deploy/daedald.service` into the VM (see step 4).
+`sudo sysctl -w vm.unprivileged_userfaultfd=1` and world-access to `/dev/kvm` and
+`/dev/userfaultfd` are needed for the (unprivileged) Firecracker to use KVM and
+userfaultfd; the demo scripts set these.
 
-### 3. PVM backend (no hardware virt)
+## The migration API
 
 ```sh
-limactl start --name=daedal-pvm lima/daedal-pvm.yaml
+daedald livemigrate serve -listen :7040 -firecracker ... -uffd-handler ... \
+  -kernel ... -rootfs ...
 
-# build the patched host kernel (cross-compiled x86_64) — reuses the ansible recipe
-# from firecracker-next/pvm-firecracker-ansible, config derived from the running
-# Ubuntu config + CONFIG_KVM_PVM=m + the 4 no-FSGSBASE/RDTSCP patches:
-bash scripts/build-host-kernel.sh        # -> kernel/build/{bzImage-pvm, kvm-pvm.ko}
-bash scripts/build-guest-kernel.sh       # -> kernel/build/vmlinux-pvmguest
-
-# install into daedal-pvm, reboot into 6.12.33-pvm, load the module:
-#   grub default = new kernel, boot arg pti=off, modprobe kvm-pvm
-# (see scripts/build-host-kernel.sh + firecracker-next/pvm-firecracker-ansible/tasks/60-boot.yml)
+curl -s localhost:7040/v1/migrations -d '{"mem_mib":32}'   # run one, get its blackout
+curl -s localhost:7040/v1/metrics                          # blackout p50/p95/p99
 ```
 
-To exercise the fallback paths (the point of the `pvm-no-fsgsbase-rdtscp` series),
-boot `daedal-pvm` with a CPU model that masks the features, then look for
-`FSGSBASE not available; the switcher will use the slower MSR-based ...` and
-`RDTSCP not available; ... trapped and emulated` in `dmesg`.
-
-### 4. Run the daemon
-
-```sh
-sudo install -m0755 bin/daedald-linux-<arch> /usr/local/bin/daedald
-sudo mkdir -p /etc/daedald && sudo cp deploy/config.<kvm|pvm>.json /etc/daedald/config.json
-sudo cp deploy/daedald.service /etc/systemd/system/
-sudo systemctl enable --now daedald
-curl -s localhost:7031/v1/capabilities
-```
-
-## Using the API
-
-```sh
-# create + boot a microVM (backend auto-detected)
-curl -s localhost:7031/v1/vms -d '{"name":"web","backend":"auto","mem_mib":256}'
-
-# migrate it to a peer daemon on another host
-curl -s localhost:7031/v1/vms/<id>/migrate \
-  -d '{"target":"http://10.0.0.2:7031","mode":"precopy","transfer_disk":true}'
-
-# migration timing + p99 across everything so far
-curl -s localhost:7031/v1/metrics | jq .total_ms
-```
-
-Full request/response shapes: `GET /spec` (served OpenAPI 3), source
-`api/internal/server/openapi.yaml`.
-
-## Benchmarking the 20s SLA
-
-```sh
-daedald bench -api http://localhost:7031 -n 200 -mode precopy -backend auto \
-  -mem 512 -report bench/results/pvm-512.json -target-ms 20000
-```
-
-Exits non-zero if p99 ≥ 20s. `-backend mock` needs no VM and runs anywhere (this is
-the CI gate in `.github/workflows/ci.yml`).
+The same orchestration is a Go package (`livemigrate.Run(Config)`) and a one-shot
+CLI (`daedald livemigrate ...`, used by the demos and the p99 harness).

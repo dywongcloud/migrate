@@ -34,4 +34,4 @@ if [ -n "$MENU" ]; then
   sudo grub-reboot "Advanced options for Ubuntu>$MENU"
   echo "one-shot boot set to: $MENU"
 fi
-echo "PVM_KERNEL_INSTALLED $KREL — reboot to boot it"
+echo "PVM_KERNEL_INSTALLED $KREL -- reboot to boot it"

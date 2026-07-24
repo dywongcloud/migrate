@@ -11,6 +11,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+      - name: ascii-only (no homoglyphs)
+        run: bash scripts/check-ascii.sh
       - name: gofmt
         working-directory: api
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
