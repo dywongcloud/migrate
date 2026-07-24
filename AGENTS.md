@@ -21,5 +21,12 @@ Non-obvious constraints for the VM/kernel path. Read before touching it.
 - Precopy's win is on *remote* migration (base memory streams while the guest runs; only the diff is downtime). For local migration precopy runs slightly slower than cold (two pauses, no transfer to overlap) -- expected, not a bug.
 - PVM-under-qemu-TCG hits a transient firecracker exit after ~25 sustained back-to-back migrations (double-emulation artifact, no OOM/oops). The daemon's dead-instance detection marks the VM errored and rejects further migrations with 409. This does not occur on real virtualization (the KVM path is stable).
 
+## Live migration (`api/internal/livemigrate`, `<= 30ms` blackout)
+- The blackout is kept small by mapping guest memory lazily at the destination (a `File` backend mmaps the shared memfile; `Uffd` uses a userspace handler). No memory is copied during the cutover, so it is ~5ms. The one-time pre-copy Full snapshot pauses the source and scales with guest RAM (~14ms@32MiB, ~128ms@128MiB), so a small guest keeps every pause under 30ms.
+- Firecracker opens the `/dev/userfaultfd` device node (not the syscall), so the Uffd backend needs `sysctl vm.unprivileged_userfaultfd=1` AND `chmod 666 /dev/userfaultfd`, alongside `chmod 666 /dev/kvm`.
+- A read-only shared rootfs must be built with `mkfs.ext4 -O ^has_journal`; a journaled ext4 needs write access to replay its journal and panics read-only.
+- The two "hosts" are podman `--rootfs` containers (image built by `scripts/build-host-image.sh` -- no registry pull; Lima's NAT stalls pulls) with `--network host`, a shared `/dev/shm`, and a bridge; the guest keeps its IP/MAC across hosts via Firecracker `network_overrides`. `--rootfs PATH` must come last, right before the command.
+
 ## Verification
 - No unit-test files. Every check is a live `exec_js`/`curl` against a running daemon (mock backend for CI, real firecracker in the VM). `bench/ci-verify.sh` is the CI gate; `daedald bench` asserts p99 < 20s and exits non-zero otherwise. Running the workflow locally (`act` + podman) needs arm64 containers -- details in recall.
+- All source is ASCII; `scripts/check-ascii.sh` is a CI step that fails on any non-ASCII byte in a tracked file (guards against homoglyphs).
