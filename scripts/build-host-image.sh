@@ -8,7 +8,9 @@ set -euxo pipefail
 require_linux
 DST=${1:-$HOME/host-rootfs}
 B=/Users/dylanwong/daedal/kernel/build
-rm -rf "$DST"; mkdir -p "$DST"/{bin,lib,lib64,usr/lib,proc,sys,dev,tmp,shared,etc}
+sudo podman rm -f host-a host-b >/dev/null 2>&1 || true
+case "${DST:-}" in ""|/|"$HOME"|"$HOME/") echo "refusing to sudo rm -rf '$DST'" >&2; exit 1;; esac
+sudo rm -rf "$DST"; mkdir -p "$DST"/{bin,lib,lib64,usr/lib,proc,sys,dev,tmp,shared,etc}
 
 install -m0755 "$B/firecracker-aarch64" "$DST/bin/firecracker"
 install -m0755 /Users/dylanwong/daedal/bin/daedald-linux-arm64 "$DST/bin/daedald"
