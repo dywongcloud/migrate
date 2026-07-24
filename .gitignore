@@ -1,5 +1,6 @@
 .deps/
 .gm/
+.agentplug-kv/
 bench/results/*.json
 images/build/
 kernel/build/
