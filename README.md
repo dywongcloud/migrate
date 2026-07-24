@@ -81,7 +81,7 @@ bash scripts/build-net-rootfs.sh          # networked guest with the UDP beacon
 bash scripts/build-host-image.sh          # container rootfs (no registry pull)
 
 # single-host mechanism + p99 (two Firecracker processes)
-bash scripts/blackout-p99.sh 20 32
+bash scripts/blackout-p99.sh 100 32
 
 # the headline: two container hosts, live migration, client-observed blackout
 bash scripts/two-host-demo.sh

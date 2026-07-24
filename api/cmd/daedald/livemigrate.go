@@ -140,7 +140,11 @@ func liveMigrateMain(args []string) {
 }
 
 func lastHeartbeat(logPath string) int {
-	out, err := exec.Command("sh", "-c", "grep -a HEARTBEAT "+logPath+" | tail -1 | grep -oE '[0-9]+' | tail -1").Output()
+	// The guest prints "HEARTBEAT <n>\r"; firecracker's own API logs (LF-only)
+	// share the same stdout and can interleave into a heartbeat line. Anchor on
+	// the trailing CR so only clean heartbeat lines match, never a spliced-in log
+	// timestamp -- taking the last clean counter.
+	out, err := exec.Command("sh", "-c", "grep -aoP 'HEARTBEAT [0-9]+(?=\\r)' "+logPath+" | tail -1 | grep -oE '[0-9]+'").Output()
 	if err != nil {
 		return -1
 	}
