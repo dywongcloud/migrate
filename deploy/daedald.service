@@ -10,7 +10,7 @@ Restart=on-failure
 RestartSec=2
 StateDirectory=daedald
 LimitNOFILE=65536
-# Firecracker (spawned as a child) opens /dev/kvm — grant the group that owns it
+# Firecracker (spawned as a child) opens /dev/kvm -- grant the group that owns it
 # so the child inherits access without world-writable /dev/kvm.
 SupplementaryGroups=kvm
 AmbientCapabilities=CAP_NET_ADMIN
