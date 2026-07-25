@@ -52,7 +52,7 @@ sudo /Users/dylanwong/daedal/bin/daedald-linux-arm64 livemigrate -attach \
   -kernel "$IMAGES/vmlinux-aarch64" -rootfs "$IMAGES/rootfs-net.ext4" \
   -mem 32 -precopy-rounds 3 -mem-backend File -target-ms 30 \
   -net-iface eth0 -guest-mac 06:00:AC:14:00:02 -src-tap "$SRC_TAP" -dst-tap "$DST_TAP" \
-  -shared-dir "$SHARED" -work-dir /tmp/twohost -report /tmp/mig-report.json 2>&1 | tail -1
+  -shared-dir "$SHARED" -work-dir /tmp/twohost -report /tmp/mig-report.json >/dev/null 2>&1 || true
 
 wait $COL
 echo "=== client-observed migration blackout across the two container hosts ==="
