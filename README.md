@@ -65,15 +65,15 @@ foundation this live-migration work builds on.
 
 Everything runs inside a Lima VM that provides nested KVM on macOS (`daedal-kvm`).
 The `scripts/` use Linux-only tooling (`mkfs.ext4`, `ip`, `podman`, `/dev/kvm`),
-so run them from a shell *inside* the VM, not on the macOS host -- the repo is
-mounted at the same path inside the VM. Run on the host by mistake, each script
-fails fast with a pointer here instead of a cryptic `command not found`.
+but you can run them straight from the macOS host: each script detects macOS and
+transparently re-executes itself inside the running VM (the repo is mounted at
+the same path), forwarding arguments and the exit code. If the VM is not running
+(`limactl start daedal-kvm`) the script fails fast with instructions instead.
+`DAEDAL_NO_FORWARD=1` disables forwarding; `DAEDAL_VM=daedal-pvm` targets the
+PVM VM.
 
 ```sh
-# open a shell inside the VM first (the repo is mounted at the same path)
-limactl shell daedal-kvm
-cd /Users/dylanwong/daedal
-
+# from the macOS host or inside the VM -- same commands either way:
 # build firecracker + the uffd handler, fetch the guest kernel,
 # build the rootfs and the self-contained container "host" image
 bash scripts/build-rootfs.sh
