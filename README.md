@@ -103,3 +103,4 @@ curl -s localhost:7040/v1/metrics                          # blackout p50/p95/p9
 
 The same orchestration is a Go package (`livemigrate.Run(Config)`) and a one-shot
 CLI (`daedald livemigrate ...`, used by the demos and the p99 harness).
+# migrate
