@@ -1,4 +1,10 @@
-import { BaseEdge, getBezierPath, type EdgeProps, type Edge } from '@xyflow/react'
+import {
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
+  type EdgeProps,
+  type Edge,
+} from '@xyflow/react'
 import type { MigrationEdgeData } from './types'
 import './MigrationEdge.css'
 
@@ -12,7 +18,7 @@ export function MigrationEdge({
   targetPosition,
   data,
 }: EdgeProps<Edge<MigrationEdgeData>>) {
-  const [path] = getBezierPath({
+  const [path, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
     sourcePosition,
@@ -22,12 +28,37 @@ export function MigrationEdge({
   })
 
   const migrating = data?.migrating ?? false
+  const holding = data?.holding ?? false
   const fadingOut = data?.fadingOut ?? false
+  const httpLabel = data?.httpLabel ?? ''
+  const httpOk = data?.httpOk ?? true
+
   const className = migrating
     ? 'migration-edge migration-edge-active'
-    : fadingOut
-      ? 'migration-edge migration-edge-fading'
-      : 'migration-edge'
+    : holding
+      ? 'migration-edge migration-edge-holding'
+      : fadingOut
+        ? 'migration-edge migration-edge-fading'
+        : 'migration-edge'
 
-  return <BaseEdge id={id} path={path} className={className} />
+  const labelVisible = (migrating || holding || fadingOut) && httpLabel.length > 0
+  const labelClass = httpOk
+    ? 'migration-edge-label migration-edge-label-ok'
+    : 'migration-edge-label migration-edge-label-err'
+
+  return (
+    <>
+      <BaseEdge id={id} path={path} className={className} />
+      {labelVisible ? (
+        <EdgeLabelRenderer>
+          <div
+            className={fadingOut ? `${labelClass} migration-edge-label-fading` : labelClass}
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+          >
+            {`--- ${httpLabel} ---`}
+          </div>
+        </EdgeLabelRenderer>
+      ) : null}
+    </>
+  )
 }

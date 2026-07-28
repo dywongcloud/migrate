@@ -5,6 +5,7 @@ export interface MigrateButtonProps {
   hostA: string
   hostB: string
   apiBase?: string
+  onHttpStatus?: (label: string, ok: boolean) => void
 }
 
 interface CurrentHostResponse {
@@ -17,7 +18,12 @@ function otherHost(host: string, hostA: string, hostB: string): string {
   return host === hostA ? hostB : hostA
 }
 
-export function MigrateButton({ hostA, hostB, apiBase = DEFAULT_API_BASE }: MigrateButtonProps) {
+export function MigrateButton({
+  hostA,
+  hostB,
+  apiBase = DEFAULT_API_BASE,
+  onHttpStatus,
+}: MigrateButtonProps) {
   const [currentHost, setCurrentHost] = useState<string>(hostA)
   const [inFlightCount, setInFlightCount] = useState<number>(0)
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
@@ -105,13 +111,16 @@ export function MigrateButton({ hostA, hostB, apiBase = DEFAULT_API_BASE }: Migr
     const to = otherHost(currentHost, hostA, hostB)
 
     setIsSubmitting(true)
+    onHttpStatus?.('HTTP ...', true)
     try {
-      await fetch(`${apiBase}/v1/migrations`, {
+      const response = await fetch(`${apiBase}/v1/migrations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from, to }),
+        body: JSON.stringify({ mem_mib: 32, from, to }),
       })
+      onHttpStatus?.(`HTTP ${response.status}`, response.ok)
     } catch {
+      onHttpStatus?.('HTTP ERR', false)
       return
     } finally {
       setIsSubmitting(false)

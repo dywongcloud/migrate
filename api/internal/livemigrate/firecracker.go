@@ -1,8 +1,3 @@
-// Package livemigrate implements post-copy live migration of a Firecracker
-// microVM with a guest blackout (the interval the guest is not executing on any
-// host) of tens of milliseconds. Guest memory is served to the destination over
-// userfaultfd, so it is faulted in lazily after the guest resumes rather than
-// copied during the blackout window.
 package livemigrate
 
 import (
@@ -15,12 +10,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"syscall"
 	"time"
 )
 
-// fcProcess is a single Firecracker process addressed over its unix API socket.
 type fcProcess struct {
 	cmd    *exec.Cmd
 	sock   string
@@ -50,9 +43,6 @@ func spawnFirecracker(binPath, sock, logPath string) (*fcProcess, error) {
 	return fc, nil
 }
 
-// attachFirecracker connects to an already-running Firecracker whose API socket
-// lives on shared storage (a container on another host owns the process). The
-// returned fcProcess drives it over the socket but does not own its lifecycle.
 func attachFirecracker(sock string) (*fcProcess, error) {
 	fc := &fcProcess{sock: sock, client: unixClient(sock)}
 	if err := fc.waitReady(15 * time.Second); err != nil {
@@ -87,29 +77,34 @@ func (p *fcProcess) waitReady(timeout time.Duration) error {
 }
 
 func (p *fcProcess) call(method, path string, body any) error {
+	_, err := p.callJSON(method, path, body)
+	return err
+}
+
+func (p *fcProcess) callJSON(method, path string, body any) ([]byte, error) {
 	var rdr io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		rdr = bytes.NewReader(buf)
 	}
 	req, err := http.NewRequest(method, "http://fc"+path, rdr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("firecracker %s %s: %d %s", method, path, resp.StatusCode, string(data))
+		return nil, fmt.Errorf("firecracker %s %s: %d %s", method, path, resp.StatusCode, string(data))
 	}
-	return nil
+	return data, nil
 }
 
 func (p *fcProcess) boot(spec GuestSpec) error {
@@ -141,6 +136,10 @@ func (p *fcProcess) boot(spec GuestSpec) error {
 func (p *fcProcess) pause() error  { return p.call("PATCH", "/vm", map[string]any{"state": "Paused"}) }
 func (p *fcProcess) resume() error { return p.call("PATCH", "/vm", map[string]any{"state": "Resumed"}) }
 
+func (p *fcProcess) machineConfig() ([]byte, error) {
+	return p.callJSON("GET", "/machine-config", nil)
+}
+
 func (p *fcProcess) snapshot(typ, statePath, memPath string) error {
 	return p.call("PUT", "/snapshot/create", map[string]any{
 		"snapshot_type": typ,
@@ -149,17 +148,14 @@ func (p *fcProcess) snapshot(typ, statePath, memPath string) error {
 	})
 }
 
-// loadAndResume restores from the vmstate and resumes the vCPUs. Guest memory is
-// not read here; it faults in lazily after resume, which keeps the blackout small.
-// backendType is "File" (mmap the shared memory file; the kernel page-faults it
-// in) or "Uffd" (a userspace handler serves faults, e.g. over a network). File is
-// preferred when source and destination share storage: no userspace round-trip
-// per fault. netOverrides remaps the restored guest NICs onto this host's taps.
-func (p *fcProcess) loadAndResume(statePath, backendType, backendPath string, netOverrides []NetOverride) error {
+func (p *fcProcess) loadAndResume(statePath, backendType, backendPath string, netOverrides []NetOverride, trackDirtyPages bool) error {
 	body := map[string]any{
 		"snapshot_path": statePath,
 		"mem_backend":   map[string]any{"backend_type": backendType, "backend_path": backendPath},
 		"resume_vm":     true,
+	}
+	if trackDirtyPages {
+		body["enable_diff_snapshots"] = true
 	}
 	if len(netOverrides) > 0 {
 		ovr := make([]map[string]any, 0, len(netOverrides))
@@ -175,7 +171,7 @@ func (p *fcProcess) kill() {
 	if p.logF != nil {
 		p.logF.Close()
 	}
-	if p.cmd == nil { // attached, not owned
+	if p.cmd == nil {
 		return
 	}
 	if p.cmd.Process != nil {
@@ -185,8 +181,6 @@ func (p *fcProcess) kill() {
 	_ = os.Remove(p.sock)
 }
 
-// uffdHandler is the external page-fault handler process that serves guest
-// memory to the destination Firecracker from the memory file.
 type uffdHandler struct {
 	cmd  *exec.Cmd
 	sock string
@@ -222,5 +216,3 @@ func (h *uffdHandler) kill() {
 		_, _ = h.cmd.Process.Wait()
 	}
 }
-
-func consolePath(dir string) string { return filepath.Join(dir, "console.log") }

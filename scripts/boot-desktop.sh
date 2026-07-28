@@ -9,6 +9,7 @@ TAP=${TAP:-tap-desk}
 HOST_IP=${HOST_IP:-172.20.0.1}
 GUEST_MAC=${GUEST_MAC:-06:00:AC:14:00:03}
 RUN=${RUN:-/tmp/fc-desktop}
+ROOTFS=${ROOTFS:-$B/rootfs-desktop.ext4}
 API_SOCK=$RUN/fc.sock
 LOG=$RUN/serial.log
 
@@ -42,7 +43,7 @@ disown
 for i in $(seq 1 100); do [ -S "$API_SOCK" ] && break; sleep 0.05; done
 
 api PUT /boot-source '{"kernel_image_path":"'$B'/vmlinux-aarch64","boot_args":"console=ttyS0 reboot=k panic=1 pci=off net.ifnames=0 biosdevname=0 root=/dev/vda rw init=/sbin/init"}'
-api PUT /drives/rootfs '{"drive_id":"rootfs","path_on_host":"'$B'/rootfs-desktop.ext4","is_root_device":true,"is_read_only":false}'
+api PUT /drives/rootfs '{"drive_id":"rootfs","path_on_host":"'$ROOTFS'","is_root_device":true,"is_read_only":false}'
 api PUT /machine-config '{"vcpu_count":2,"mem_size_mib":1024}'
 api PUT /network-interfaces/eth0 '{"iface_id":"eth0","guest_mac":"'$GUEST_MAC'","host_dev_name":"'$TAP'"}'
 api PUT /actions '{"action_type":"InstanceStart"}'

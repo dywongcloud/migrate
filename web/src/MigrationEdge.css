@@ -13,9 +13,17 @@
   animation: migration-edge-march 0.5s linear infinite;
 }
 
+.migration-edge-holding {
+  stroke: #4fc3f7;
+  stroke-width: 3;
+  stroke-dasharray: 6 4;
+  opacity: 1;
+}
+
 .migration-edge-fading {
   stroke: #4fc3f7;
   stroke-width: 3;
+  stroke-dasharray: 6 4;
   opacity: 0;
 }
 
@@ -23,4 +31,33 @@
   to {
     stroke-dashoffset: -20;
   }
+}
+
+.migration-edge-label {
+  position: absolute;
+  pointer-events: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: #0b0f14;
+  transition: opacity 600ms ease;
+  opacity: 1;
+}
+
+.migration-edge-label-ok {
+  color: #4fc3f7;
+  border: 1px solid #2b6d8a;
+}
+
+.migration-edge-label-err {
+  color: #f07878;
+  border: 1px solid #8a2b2b;
+}
+
+.migration-edge-label-fading {
+  opacity: 0;
 }

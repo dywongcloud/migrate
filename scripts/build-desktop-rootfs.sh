@@ -46,7 +46,7 @@ sudo cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
 
 sudo chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive apt-get update
 sudo chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  tigervnc-standalone-server xfce4 xfce4-terminal dbus-x11 ifupdown
+  tigervnc-standalone-server xfce4 xfce4-terminal dbus-x11 ifupdown openssh-server
 
 sudo chroot "$ROOT" useradd -m -s /bin/bash vncuser
 echo "vncuser:vncuser" | sudo chroot "$ROOT" chpasswd
@@ -81,7 +81,14 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 
+if [ -n "${GUEST_SSH_PUBKEY:-}" ]; then
+  sudo install -d -m 700 "$ROOT/root/.ssh"
+  printf '%s\n' "$GUEST_SSH_PUBKEY" | sudo tee "$ROOT/root/.ssh/authorized_keys" >/dev/null
+  sudo chmod 600 "$ROOT/root/.ssh/authorized_keys"
+fi
+
 sudo chroot "$ROOT" systemctl enable vncdesktop.service
+sudo chroot "$ROOT" systemctl enable ssh.service
 sudo chroot "$ROOT" systemctl enable serial-getty@ttyS0.service
 sudo chroot "$ROOT" systemctl set-default multi-user.target
 sudo chroot "$ROOT" systemctl disable lightdm.service 2>/dev/null || true

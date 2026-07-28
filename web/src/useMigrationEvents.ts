@@ -29,6 +29,7 @@ declare global {
 export interface UseMigrationEventsOptions {
   url?: string
   fadeDurationMs?: number
+  holdDurationMs?: number
   hostNodeIds?: Record<string, string>
   edgeId: string
   setNodes: Dispatch<SetStateAction<Node<MicroVMNodeData>[]>>
@@ -38,6 +39,7 @@ export interface UseMigrationEventsOptions {
 
 export const DEFAULT_MIGRATION_EVENTS_URL = 'http://localhost:7040/v1/migrations/events'
 export const DEFAULT_FADE_DURATION_MS = 600
+export const DEFAULT_HOLD_DURATION_MS = 2500
 
 function appendToEventLog(event: MigrationEvent): void {
   if (typeof window === 'undefined') {
@@ -72,7 +74,9 @@ export function useMigrationEvents(options: UseMigrationEventsOptions): void {
       )
     }
 
-    const setEdgeFlags = (flags: Partial<Pick<MigrationEdgeData, 'migrating' | 'fadingOut'>>): void => {
+    const setEdgeFlags = (
+      flags: Partial<Pick<MigrationEdgeData, 'migrating' | 'holding' | 'fadingOut'>>,
+    ): void => {
       const targetEdgeId = optionsRef.current.edgeId
       optionsRef.current.setEdges((prevEdges) =>
         prevEdges.map((edge) =>
@@ -112,13 +116,13 @@ export function useMigrationEvents(options: UseMigrationEventsOptions): void {
             pairByMigrationId.set(event.migration_id, { from: event.from, to: event.to })
             setNodeHighlight([event.from, event.to], true)
           }
-          setEdgeFlags({ migrating: true, fadingOut: false })
+          setEdgeFlags({ migrating: true, holding: false, fadingOut: false })
           break
         }
         case 'migration_complete': {
           const pair = resolvePair(event)
           pairByMigrationId.delete(event.migration_id)
-          setEdgeFlags({ migrating: false, fadingOut: true })
+          setEdgeFlags({ migrating: false, holding: true, fadingOut: false })
           if (pair) {
             setNodeHighlight([pair.from, pair.to], false)
           }
@@ -126,10 +130,15 @@ export function useMigrationEvents(options: UseMigrationEventsOptions): void {
             optionsRef.current.onOwnerChanged?.(pair.to)
           }
           const fadeDurationMs = optionsRef.current.fadeDurationMs ?? DEFAULT_FADE_DURATION_MS
+          const holdDurationMs = optionsRef.current.holdDurationMs ?? DEFAULT_HOLD_DURATION_MS
           const timer = setTimeout(() => {
-            setEdgeFlags({ fadingOut: false })
-            fadeTimers.delete(event.migration_id)
-          }, fadeDurationMs)
+            setEdgeFlags({ holding: false, fadingOut: true })
+            const fadeTimer = setTimeout(() => {
+              setEdgeFlags({ fadingOut: false })
+              fadeTimers.delete(event.migration_id)
+            }, fadeDurationMs)
+            fadeTimers.set(event.migration_id, fadeTimer)
+          }, holdDurationMs)
           fadeTimers.set(event.migration_id, timer)
           break
         }
@@ -137,10 +146,19 @@ export function useMigrationEvents(options: UseMigrationEventsOptions): void {
           const pair = resolvePair(event)
           pairByMigrationId.delete(event.migration_id)
           clearFadeTimer(event.migration_id)
-          setEdgeFlags({ migrating: false, fadingOut: false })
+          setEdgeFlags({ migrating: false, holding: true, fadingOut: false })
           if (pair) {
             setNodeHighlight([pair.from, pair.to], false)
           }
+          const failHold = setTimeout(() => {
+            setEdgeFlags({ holding: false, fadingOut: true })
+            const failFade = setTimeout(() => {
+              setEdgeFlags({ fadingOut: false })
+              fadeTimers.delete(event.migration_id)
+            }, optionsRef.current.fadeDurationMs ?? DEFAULT_FADE_DURATION_MS)
+            fadeTimers.set(event.migration_id, failFade)
+          }, optionsRef.current.holdDurationMs ?? DEFAULT_HOLD_DURATION_MS)
+          fadeTimers.set(event.migration_id, failHold)
           break
         }
         case 'migration_progress': {

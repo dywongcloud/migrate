@@ -9,18 +9,27 @@ import {
   type EdgeTypes,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import type { MicroVMNodeData, MigrationEdgeData } from './types'
+import type { HostNodeData, DesktopNodeData, MigrationEdgeData } from './types'
 import { MicroVMNode } from './MicroVMNode'
+import { DesktopNode } from './DesktopNode'
 import { MigrationEdge } from './MigrationEdge'
 import { useMigrationEvents } from './useMigrationEvents'
 import { MigrateButton } from './MigrateButton'
 import './App.toolbar.css'
 
 const HOSTS_URL = 'http://localhost:7040/v1/hosts'
-const MIGRATION_EDGE_ID = 'host-a-desktop-host-b-desktop'
+const MIGRATION_EDGE_ID = 'host-a-host-b'
 const HOST_NODE_IDS: Record<string, string> = {
-  'host-a': 'host-a-desktop',
-  'host-b': 'host-b-desktop',
+  'host-a': 'host-a',
+  'host-b': 'host-b',
+}
+const DESKTOP_BY_HOST: Record<string, string> = {
+  'host-a': 'desktop-a',
+  'host-b': 'desktop-b',
+}
+const VNC_PARAM_BY_DESKTOP: Record<string, string> = {
+  'desktop-a': 'nodeA',
+  'desktop-b': 'nodeB',
 }
 
 interface HostRegistryEntry {
@@ -30,34 +39,56 @@ interface HostRegistryEntry {
 
 type HostsStatus = 'loading' | 'ready' | 'unreachable'
 
-const nodeTypes: NodeTypes = { microvm: MicroVMNode }
+const nodeTypes: NodeTypes = { microvm: MicroVMNode, desktop: DesktopNode }
 const edgeTypes: EdgeTypes = { migration: MigrationEdge }
 
-const initialNodes: Node<MicroVMNodeData>[] = [
+type GraphNode = Node<HostNodeData> | Node<DesktopNodeData>
+
+const initialNodes: GraphNode[] = [
   {
-    id: 'host-a-desktop',
+    id: 'host-a',
     type: 'microvm',
-    position: { x: 0, y: 0 },
+    position: { x: 40, y: 0 },
     data: {
-      id: 'host-a-desktop',
-      label: 'Host A Desktop',
+      id: 'host-a',
+      label: 'Host A',
       hostAddr: '',
-      vncNodeId: '',
-      status: 'idle',
+      status: 'running',
       migrationHighlight: false,
     },
   },
   {
-    id: 'host-b-desktop',
+    id: 'host-b',
     type: 'microvm',
-    position: { x: 400, y: 0 },
+    position: { x: 800, y: 0 },
     data: {
-      id: 'host-b-desktop',
-      label: 'Host B Desktop',
+      id: 'host-b',
+      label: 'Host B',
       hostAddr: '',
-      vncNodeId: '',
-      status: 'idle',
+      status: 'running',
       migrationHighlight: false,
+    },
+  },
+  {
+    id: 'desktop-a',
+    type: 'desktop',
+    position: { x: 0, y: 170 },
+    data: {
+      id: 'desktop-a',
+      label: 'XFCE desktop (host A) -- VNC over iroh',
+      hostId: 'host-a',
+      vncNodeId: '',
+    },
+  },
+  {
+    id: 'desktop-b',
+    type: 'desktop',
+    position: { x: 760, y: 170 },
+    data: {
+      id: 'desktop-b',
+      label: 'XFCE desktop (host B) -- VNC over iroh',
+      hostId: 'host-b',
+      vncNodeId: '',
     },
   },
 ]
@@ -66,69 +97,56 @@ const initialEdges: Edge<MigrationEdgeData>[] = [
   {
     id: MIGRATION_EDGE_ID,
     type: 'migration',
-    source: 'host-a-desktop',
-    target: 'host-b-desktop',
+    source: 'host-a',
+    target: 'host-b',
     data: {
       id: MIGRATION_EDGE_ID,
-      source: 'host-a-desktop',
-      target: 'host-b-desktop',
+      source: 'host-a',
+      target: 'host-b',
       migrating: false,
+      holding: false,
       fadingOut: false,
+      httpLabel: '',
+      httpOk: true,
     },
   },
 ]
 
-function statusLabel(status: HostsStatus): string {
-  if (status === 'loading') {
-    return 'loading host registry...'
-  }
-  if (status === 'unreachable') {
-    return 'host registry unreachable, using defaults'
-  }
-  return 'host registry loaded'
+const desktopEdges: Edge[] = [
+  {
+    id: 'host-a-desktop-a',
+    source: 'host-a',
+    sourceHandle: 'desktop',
+    target: 'desktop-a',
+    label: 'VNC 5901',
+    style: { stroke: '#3f4c5a' },
+  },
+  {
+    id: 'host-b-desktop-b',
+    source: 'host-b',
+    sourceHandle: 'desktop',
+    target: 'desktop-b',
+    label: 'VNC 5901',
+    style: { stroke: '#3f4c5a' },
+  },
+]
+
+function isDesktopNode(node: GraphNode): node is Node<DesktopNodeData> {
+  return node.type === 'desktop'
 }
 
-const NODE_ID_PARAMS: Record<string, string> = {
-  'host-a-desktop': 'nodeA',
-  'host-b-desktop': 'nodeB',
-}
-
-const HOST_IDS = ['host-a', 'host-b']
-
-function readMigratingDesktop(): { vncNodeId: string; owner: string } | null {
-  const params = new URLSearchParams(window.location.search)
-  const vncNodeId = params.get('vnc')
-  if (!vncNodeId) {
-    return null
-  }
-  const requested = params.get('owner')
-  const owner = requested && HOST_IDS.includes(requested) ? requested : HOST_IDS[0]
-  return { vncNodeId, owner }
-}
-
-function assignDesktopToOwner(
-  base: Node<MicroVMNodeData>[],
-  vncNodeId: string,
-  ownerHost: string,
-): Node<MicroVMNodeData>[] {
-  const ownerNodeId = HOST_NODE_IDS[ownerHost]
-  return base.map((node) => ({
-    ...node,
-    data: {
-      ...node.data,
-      vncNodeId: node.id === ownerNodeId ? vncNodeId : '',
-      status: node.id === ownerNodeId ? 'running' : 'idle',
-    },
-  }))
-}
-
-function nodesWithUrlOverrides(
-  base: Node<MicroVMNodeData>[],
-): { nodes: Node<MicroVMNodeData>[]; overridden: boolean } {
+function nodesWithUrlOverrides(base: GraphNode[]): { nodes: GraphNode[]; overridden: boolean } {
   const params = new URLSearchParams(window.location.search)
   let overridden = false
-  const nodes = base.map((node) => {
-    const value = params.get(NODE_ID_PARAMS[node.id])
+  const nodes: GraphNode[] = base.map((node) => {
+    if (!isDesktopNode(node)) {
+      return node
+    }
+    const paramName = VNC_PARAM_BY_DESKTOP[node.id]
+    if (!paramName) {
+      return node
+    }
+    const value = params.get(paramName)
     if (!value) {
       return node
     }
@@ -138,25 +156,32 @@ function nodesWithUrlOverrides(
   return { nodes, overridden }
 }
 
+function statusLabel(status: HostsStatus): string {
+  if (status === 'loading') {
+    return 'loading host registry...'
+  }
+  if (status === 'unreachable') {
+    return 'host registry unreachable, using URL overrides'
+  }
+  return 'host registry loaded'
+}
+
 function App() {
-  const migrating = readMigratingDesktop()
-  const initial = migrating
-    ? {
-        nodes: assignDesktopToOwner(initialNodes, migrating.vncNodeId, migrating.owner),
-        overridden: true,
-      }
-    : nodesWithUrlOverrides(initialNodes)
-  const [nodes, setNodes] = useState<Node<MicroVMNodeData>[]>(initial.nodes)
+  const initial = nodesWithUrlOverrides(initialNodes)
+  const [nodes, setNodes] = useState<GraphNode[]>(initial.nodes)
   const [edges, setEdges] = useState<Edge<MigrationEdgeData>[]>(initialEdges)
   const [hostsStatus, setHostsStatus] = useState<HostsStatus>(
     initial.overridden ? 'ready' : 'loading',
   )
 
-  const moveDesktopTo = (toHostId: string) => {
-    if (!migrating) {
-      return
-    }
-    setNodes((prevNodes) => assignDesktopToOwner(prevNodes, migrating.vncNodeId, toHostId))
+  const setHttpLabel = (label: string, ok: boolean) => {
+    setEdges((prevEdges) =>
+      prevEdges.map((edge) =>
+        edge.id === MIGRATION_EDGE_ID && edge.data
+          ? { ...edge, data: { ...edge.data, httpLabel: label, httpOk: ok } }
+          : edge,
+      ),
+    )
   }
 
   useEffect(() => {
@@ -179,8 +204,13 @@ function App() {
           return
         }
         setNodes((prevNodes) =>
-          prevNodes.map((node) => {
-            const entry = entries.find((candidate) => HOST_NODE_IDS[candidate.id] === node.id)
+          prevNodes.map<GraphNode>((node) => {
+            if (!isDesktopNode(node)) {
+              return node
+            }
+            const entry = entries.find(
+              (candidate) => DESKTOP_BY_HOST[candidate.id] === node.id,
+            )
             return entry ? { ...node, data: { ...node.data, vncNodeId: entry.node_id } } : node
           }),
         )
@@ -200,21 +230,26 @@ function App() {
   }, [])
 
   useMigrationEvents({
-    setNodes,
+    setNodes: setNodes as React.Dispatch<React.SetStateAction<Node<HostNodeData>[]>>,
     setEdges,
     edgeId: MIGRATION_EDGE_ID,
     hostNodeIds: HOST_NODE_IDS,
-    onOwnerChanged: moveDesktopTo,
   })
 
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <div className="app-toolbar">
-        <MigrateButton hostA="host-a" hostB="host-b" />
+        <MigrateButton hostA="host-a" hostB="host-b" onHttpStatus={setHttpLabel} />
         <span className="app-hosts-status">{statusLabel(hostsStatus)}</span>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} fitView>
+        <ReactFlow
+          nodes={nodes}
+          edges={[...desktopEdges, ...edges] as Edge[]}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          fitView
+        >
           <Background />
           <Controls />
         </ReactFlow>

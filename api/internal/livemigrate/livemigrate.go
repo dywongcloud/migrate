@@ -9,32 +9,27 @@ import (
 	"github.com/dylanwongtencent/daedal/api/internal/migrate"
 )
 
-// GuestSpec describes the microVM to migrate.
 type GuestSpec struct {
 	KernelPath     string
 	RootfsPath     string
 	BootArgs       string
 	Vcpus          int64
 	MemMiB         int64
-	RootfsReadOnly bool // shared read-only rootfs; mutable state lives in RAM and migrates with it
+	RootfsReadOnly bool
 	Net            *NetIface
 }
 
-// NetIface is the guest network interface on the source host.
 type NetIface struct {
 	IfaceID  string
 	GuestMAC string
 	HostTap  string
 }
 
-// NetOverride remaps a restored guest NIC onto a destination-host tap so the
-// guest keeps its MAC/IP after the move.
 type NetOverride struct {
 	IfaceID string
 	HostTap string
 }
 
-// EventKind names a real transition Run reaches during a migration.
 type EventKind string
 
 const (
@@ -43,48 +38,35 @@ const (
 	EventRollback           EventKind = "rollback"
 )
 
-// Event reports a Run transition to Config.Progress. BlackoutMs is populated
-// on EventLoadResumeComplete; Err is populated on EventRollback.
 type Event struct {
 	Kind       EventKind
 	BlackoutMs float64
 	Err        error
 }
 
-// ProgressFunc receives Run's real transitions as they happen. Nil disables
-// progress reporting.
 type ProgressFunc func(Event)
 
-// Config parameterizes a single-host live migration between two Firecracker
-// processes that share a tmpfs directory (SharedDir).
 type Config struct {
 	FirecrackerBin string
 	UffdHandlerBin string
-	SharedDir      string // tmpfs visible to both source and destination
-	WorkDir        string // per-run scratch for sockets and logs
+	SharedDir      string
+	WorkDir        string
 	Guest          GuestSpec
-	PrecopyRounds  int           // diff-snapshot passes that refresh the base memfile while the guest runs
-	DestNet        []NetOverride // remap guest NICs onto the destination host's taps
-	MemBackend     string        // "File" (mmap shared memfile) or "Uffd" (userspace handler)
+	PrecopyRounds  int
+	DestNet        []NetOverride
+	MemBackend     string
 
-	// Attach mode: the source and destination Firecracker processes are owned by
-	// separate container "hosts" and expose their API sockets (and serial logs)
-	// on the shared tmpfs. When set, the orchestrator drives these instead of
-	// spawning its own, so the two VMs genuinely run on two concurrent hosts.
 	Attach  bool
 	SrcSock string
 	DstSock string
 	SrcLog  string
 	DstLog  string
 
-	FaultInjectRestore bool // force the destination restore to fail, to exercise rollback
+	FaultInjectRestore bool
 
 	Progress ProgressFunc
 }
 
-// Result reports the timings of a completed migration. CutoverStartUnixNs and
-// CutoverEndUnixNs bracket the blackout in wall-clock time so an external client
-// (the beacon collector) can attribute its observed service gap to the cutover.
 type Result struct {
 	BlackoutMs         float64            `json:"blackout_ms"`
 	PhasesMs           map[string]float64 `json:"phases_ms"`
@@ -117,94 +99,53 @@ func (c *Config) paths() paths {
 	}
 }
 
-// Run boots a source guest, pre-copies its memory, then performs the post-copy
-// cutover and returns the measured guest blackout. The source and destination
-// Firecracker processes are left running (destination holds the migrated guest);
-// the caller owns teardown via the returned Handles.
-func Run(c Config) (*Result, *Handles, error) {
+func prepareDirs(c *Config) error {
 	if err := os.MkdirAll(c.SharedDir, 0o755); err != nil {
-		return nil, nil, err
+		return err
 	}
-	if err := os.MkdirAll(c.WorkDir, 0o755); err != nil {
-		return nil, nil, err
-	}
-	p := c.paths()
+	return os.MkdirAll(c.WorkDir, 0o755)
+}
+
+func openFirecracker(c *Config, sock, logPath string) (*fcProcess, error) {
 	if c.Attach {
-		p.srcSock, p.dstSock, p.srcLog, p.dstLog = c.SrcSock, c.DstSock, c.SrcLog, c.DstLog
+		return attachFirecracker(sock)
 	}
+	return spawnFirecracker(c.FirecrackerBin, sock, logPath)
+}
 
-	var src *fcProcess
-	var err error
-	if c.Attach {
-		src, err = attachFirecracker(p.srcSock)
-	} else {
-		src, err = spawnFirecracker(c.FirecrackerBin, p.srcSock, p.srcLog)
-	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("source firecracker: %w", err)
-	}
-	h := &Handles{Src: src}
-	if err := src.boot(c.Guest); err != nil {
-		h.Close()
-		return nil, nil, fmt.Errorf("boot guest: %w", err)
-	}
-	time.Sleep(4 * time.Second) // let the guest reach its workload
-
-	res := &Result{PhasesMs: map[string]float64{}}
-
-	// Pre-copy: capture a base memory image while the guest runs, refreshing it
-	// with successive diff snapshots so the final cutover diff is small.
-	precopyStart := time.Now()
+func precopy(c *Config, p paths, src *fcProcess, res *Result) error {
+	start := time.Now()
 	if err := src.pause(); err != nil {
-		h.Close()
-		return nil, nil, err
+		return err
 	}
 	fullStart := time.Now()
 	if err := src.snapshot("Full", p.baseState, p.baseMem); err != nil {
-		h.Close()
-		return nil, nil, err
+		return err
 	}
 	res.PhasesMs["base_full_snapshot"] = ms(time.Since(fullStart))
 	if err := src.resume(); err != nil {
-		h.Close()
-		return nil, nil, err
+		return err
 	}
 	for i := 0; i < c.PrecopyRounds; i++ {
 		time.Sleep(300 * time.Millisecond)
 		if err := src.pause(); err != nil {
-			h.Close()
-			return nil, nil, err
+			return err
 		}
 		if err := src.snapshot("Diff", p.diffState, p.diffMem); err != nil {
-			h.Close()
-			return nil, nil, err
+			return err
 		}
 		if err := migrate.MergeDiffOntoBase(p.baseMem, p.diffMem); err != nil {
-			h.Close()
-			return nil, nil, err
+			return err
 		}
 		if err := src.resume(); err != nil {
-			h.Close()
-			return nil, nil, err
+			return err
 		}
 	}
-	res.PrecopyMs = ms(time.Since(precopyStart))
+	res.PrecopyMs = ms(time.Since(start))
+	return nil
+}
 
-	// The destination Firecracker is idle and API-ready BEFORE the cutover (its
-	// container started it, or we spawn it here) so the blackout excludes startup.
-	var dst *fcProcess
-	if c.Attach {
-		dst, err = attachFirecracker(p.dstSock)
-	} else {
-		dst, err = spawnFirecracker(c.FirecrackerBin, p.dstSock, p.dstLog)
-	}
-	if err != nil {
-		h.Close()
-		return nil, nil, fmt.Errorf("dest firecracker: %w", err)
-	}
-	h.Dst = dst
-
-	// ---- cutover: the guest is not executing anywhere for this window ----
+func cutover(c *Config, p paths, src, dst *fcProcess, res *Result, trackDirtyPagesOnRestore bool) (*uffdHandler, bool, error) {
 	t0 := time.Now()
 	res.CutoverStartUnixNs = t0.UnixNano()
 	if c.Progress != nil {
@@ -213,42 +154,33 @@ func Run(c Config) (*Result, *Handles, error) {
 
 	tp := time.Now()
 	if err := src.pause(); err != nil {
-		h.Close()
-		return nil, nil, err
+		return nil, false, err
 	}
 	res.PhasesMs["pause"] = ms(time.Since(tp))
 
-	// From here the source is paused. Any failure rolls back by resuming it, so
-	// the guest keeps running on the source rather than being lost.
-	rollback := func(err error) (*Result, *Handles, error) {
+	rollback := func(cause error, uffd *uffdHandler) (*uffdHandler, bool, error) {
+		if uffd != nil {
+			uffd.kill()
+		}
 		if rerr := src.resume(); rerr != nil {
-			h.Close()
-			return nil, nil, fmt.Errorf("%w (and rollback resume failed: %v)", err, rerr)
+			return nil, false, fmt.Errorf("%w (and rollback resume failed: %v)", cause, rerr)
 		}
-		if h.Dst != nil {
-			h.Dst.kill()
-			h.Dst = nil
-		}
-		if h.Uffd != nil {
-			h.Uffd.kill()
-			h.Uffd = nil
-		}
-		wrapped := fmt.Errorf("migration rolled back, guest still on source: %w", err)
+		wrapped := fmt.Errorf("migration rolled back, guest still on source: %w", cause)
 		if c.Progress != nil {
 			c.Progress(Event{Kind: EventRollback, Err: wrapped})
 		}
-		return nil, h, wrapped
+		return nil, true, wrapped
 	}
 
 	tp = time.Now()
 	if err := src.snapshot("Diff", p.diffState, p.diffMem); err != nil {
-		return rollback(err)
+		return rollback(err, nil)
 	}
 	res.PhasesMs["diff_snapshot"] = ms(time.Since(tp))
 
 	tp = time.Now()
 	if err := migrate.MergeDiffOntoBase(p.baseMem, p.diffMem); err != nil {
-		return rollback(err)
+		return rollback(err, nil)
 	}
 	res.PhasesMs["merge"] = ms(time.Since(tp))
 
@@ -257,13 +189,14 @@ func Run(c Config) (*Result, *Handles, error) {
 		backendType = "File"
 	}
 	backendPath := p.baseMem
+	var uffd *uffdHandler
 	if backendType == "Uffd" {
 		tp = time.Now()
-		uffd, err := startUffdHandler(c.UffdHandlerBin, p.uffdSock, p.baseMem, p.uffdLog)
+		started, err := startUffdHandler(c.UffdHandlerBin, p.uffdSock, p.baseMem, p.uffdLog)
 		if err != nil {
-			return rollback(err)
+			return rollback(err, nil)
 		}
-		h.Uffd = uffd
+		uffd = started
 		res.PhasesMs["uffd_start"] = ms(time.Since(tp))
 		backendPath = p.uffdSock
 	}
@@ -273,8 +206,8 @@ func Run(c Config) (*Result, *Handles, error) {
 		restoreState = p.diffState + ".nonexistent"
 	}
 	tp = time.Now()
-	if err := dst.loadAndResume(restoreState, backendType, backendPath, c.DestNet); err != nil {
-		return rollback(fmt.Errorf("dest restore: %w", err))
+	if err := dst.loadAndResume(restoreState, backendType, backendPath, c.DestNet, trackDirtyPagesOnRestore); err != nil {
+		return rollback(fmt.Errorf("dest restore: %w", err), uffd)
 	}
 	res.PhasesMs["load_resume"] = ms(time.Since(tp))
 
@@ -283,14 +216,59 @@ func Run(c Config) (*Result, *Handles, error) {
 		c.Progress(Event{Kind: EventLoadResumeComplete, BlackoutMs: res.BlackoutMs})
 	}
 	res.CutoverEndUnixNs = time.Now().UnixNano()
-	// ---- guest is now executing on the destination ----
+	return uffd, false, nil
+}
+
+func Run(c Config) (*Result, *Handles, error) {
+	if err := prepareDirs(&c); err != nil {
+		return nil, nil, err
+	}
+	p := c.paths()
+	if c.Attach {
+		p.srcSock, p.dstSock, p.srcLog, p.dstLog = c.SrcSock, c.DstSock, c.SrcLog, c.DstLog
+	}
+
+	src, err := openFirecracker(&c, p.srcSock, p.srcLog)
+	if err != nil {
+		return nil, nil, fmt.Errorf("source firecracker: %w", err)
+	}
+	h := &Handles{Src: src}
+	if err := src.boot(c.Guest); err != nil {
+		h.Close()
+		return nil, nil, fmt.Errorf("boot guest: %w", err)
+	}
+	time.Sleep(4 * time.Second)
+
+	res := &Result{PhasesMs: map[string]float64{}}
+	if err := precopy(&c, p, src, res); err != nil {
+		h.Close()
+		return nil, nil, err
+	}
+
+	dst, err := openFirecracker(&c, p.dstSock, p.dstLog)
+	if err != nil {
+		h.Close()
+		return nil, nil, fmt.Errorf("dest firecracker: %w", err)
+	}
+	h.Dst = dst
+
+	uffd, rolledBack, err := cutover(&c, p, src, dst, res, false)
+	if err != nil {
+		h.Dst.kill()
+		h.Dst = nil
+		if !rolledBack {
+			h.Close()
+			return nil, nil, err
+		}
+		return nil, h, err
+	}
+	h.Uffd = uffd
 
 	res.SrcConsole = p.srcLog
 	res.DstConsole = p.dstLog
 	return res, h, nil
 }
 
-// Handles owns the processes a migration leaves running.
 type Handles struct {
 	Src  *fcProcess
 	Dst  *fcProcess

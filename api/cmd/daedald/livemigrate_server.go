@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sort"
 	"sync"
@@ -142,17 +143,63 @@ func (m *migrationInFlight) Finish(pairKey string) {
 	m.mu.Unlock()
 }
 
-// liveMigrateServe exposes the live-migration orchestrator as a small REST API:
-//
-//	POST /v1/migrations                -> run one live migration, return its timings
-//	GET  /v1/migrations/events         -> SSE stream of real migration lifecycle events
-//	GET  /v1/metrics                   -> blackout p50/p95/p99 across migrations run so far
-//	POST /v1/hosts/{id}/vnc-endpoint   -> register a host's VNC tunnel node id
-//	GET  /v1/hosts                     -> list registered hosts
-//	GET  /healthz
-//
-// The environment (binaries, guest images) is fixed at startup; each request
-// triggers a migration and records its blackout.
+type migrationProgressPublisher struct {
+	bc          *migrationBroadcaster
+	migrationID string
+	targetMs    float64
+	failedSent  bool
+}
+
+func (p *migrationProgressPublisher) handle(ev livemigrate.Event) {
+	switch ev.Kind {
+	case livemigrate.EventCutoverStart:
+		p.bc.Publish(map[string]any{
+			"type":         "migration_progress",
+			"migration_id": p.migrationID,
+			"phase":        "cutover",
+		})
+	case livemigrate.EventLoadResumeComplete:
+		p.bc.Publish(map[string]any{
+			"type":         "migration_complete",
+			"migration_id": p.migrationID,
+			"blackout_ms":  ev.BlackoutMs,
+			"pass":         ev.BlackoutMs <= p.targetMs,
+		})
+	case livemigrate.EventRollback:
+		p.failedSent = true
+		p.bc.Publish(map[string]any{
+			"type":         "migration_failed",
+			"migration_id": p.migrationID,
+			"error":        ev.Err.Error(),
+		})
+	}
+}
+
+func (p *migrationProgressPublisher) publishFailure(err error) {
+	if p.failedSent {
+		return
+	}
+	p.failedSent = true
+	p.bc.Publish(map[string]any{
+		"type":         "migration_failed",
+		"migration_id": p.migrationID,
+		"error":        err.Error(),
+	})
+}
+
+func newMigrationID(from, to string) string {
+	return from + "->" + to + "-" + fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func liveMigrateServe(args []string) {
 	fs := flag.NewFlagSet("livemigrate-serve", flag.ExitOnError)
 	listen := fs.String("listen", "127.0.0.1:7040", "listen address")
@@ -162,6 +209,21 @@ func liveMigrateServe(args []string) {
 	rootfs := fs.String("rootfs", "", "guest rootfs path")
 	shared := fs.String("shared-dir", "/dev/shm/daedal-lm", "shared tmpfs dir")
 	target := fs.Float64("target-ms", 30, "blackout SLA in ms")
+	precopyRounds := fs.Int("precopy-rounds", 3, "diff-snapshot passes that refresh the base memfile before the cutover")
+	memBackend := fs.String("mem-backend", "File", "destination memory backend: File or Uffd")
+	persistent := fs.Bool("persistent-guest", false, "boot ONE guest at startup and live-migrate that same running guest between the two hosts on every request")
+	guestRootfs := fs.String("guest-rootfs", "", "rootfs for the persistent guest (defaults to -rootfs)")
+	guestMemMiB := fs.Int64("guest-mem-mib", 1024, "persistent guest RAM in MiB")
+	guestVcpus := fs.Int64("guest-vcpus", 2, "persistent guest vcpu count")
+	guestBootArgs := fs.String("guest-boot-args", "console=ttyS0 reboot=k panic=1 pci=off net.ifnames=0 biosdevname=0 root=/dev/vda rw init=/sbin/init", "persistent guest kernel boot args")
+	guestIface := fs.String("guest-iface", "eth0", "persistent guest NIC id")
+	guestMAC := fs.String("guest-mac", "06:00:AC:14:00:03", "persistent guest MAC, kept across hosts")
+	guestRootfsRO := fs.Bool("guest-rootfs-ro", false, "open the persistent guest rootfs read-only")
+	hostAName := fs.String("host-a", "host-a", "name of the first host")
+	hostBName := fs.String("host-b", "host-b", "name of the second host")
+	hostATap := fs.String("host-a-tap", "tap-desk-a", "host tap the persistent guest NIC binds to on host-a")
+	hostBTap := fs.String("host-b-tap", "tap-desk-b", "host tap the persistent guest NIC binds to on host-b")
+	sessionWorkDir := fs.String("session-work-dir", "/tmp/daedal-lm-session", "scratch dir for the persistent session's per-host API sockets and serial logs")
 	_ = fs.Parse(args)
 
 	base := livemigrate.Config{
@@ -176,12 +238,48 @@ func liveMigrateServe(args []string) {
 			MemMiB:         32,
 			RootfsReadOnly: true,
 		},
-		PrecopyRounds: 3,
-		MemBackend:    "File",
+		PrecopyRounds: *precopyRounds,
+		MemBackend:    *memBackend,
+	}
+
+	ln, err := net.Listen("tcp", *listen)
+	if err != nil {
+		log.Fatalf("listen %s: %v", *listen, err)
+	}
+
+	var session *livemigrate.Session
+	if *persistent {
+		cfg := base
+		cfg.WorkDir = *sessionWorkDir
+		cfg.Guest = livemigrate.GuestSpec{
+			KernelPath:     *kernel,
+			RootfsPath:     firstNonEmpty(*guestRootfs, *rootfs),
+			BootArgs:       *guestBootArgs,
+			Vcpus:          *guestVcpus,
+			MemMiB:         *guestMemMiB,
+			RootfsReadOnly: *guestRootfsRO,
+			Net:            &livemigrate.NetIface{IfaceID: *guestIface, GuestMAC: *guestMAC},
+		}
+		started, serr := livemigrate.StartSession(cfg, [2]livemigrate.HostSpec{
+			{Name: *hostAName, Tap: *hostATap},
+			{Name: *hostBName, Tap: *hostBTap},
+		})
+		if serr != nil {
+			log.Fatalf("persistent guest: %v", serr)
+		}
+		session = started
+		log.Printf("persistent guest booted on %s: rootfs=%s mem=%dMiB vcpus=%d mac=%s tap=%s api_sock=%s",
+			session.CurrentHost(), cfg.Guest.RootfsPath, cfg.Guest.MemMiB, cfg.Guest.Vcpus,
+			*guestMAC, *hostATap, session.GuestSock())
 	}
 
 	var mu sync.Mutex
 	var blackouts []float64
+	recordBlackout := func(v float64) {
+		mu.Lock()
+		blackouts = append(blackouts, v)
+		mu.Unlock()
+	}
 	bc := newMigrationBroadcaster()
 	hosts := newHostRegistry()
 	inFlight := newMigrationInFlight()
@@ -206,6 +304,33 @@ func liveMigrateServe(args []string) {
 	mux.HandleFunc("GET /v1/hosts", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, hosts.List())
 	})
+	mux.HandleFunc("GET /v1/migrations/current-host", func(w http.ResponseWriter, r *http.Request) {
+		if session == nil {
+			writeJSON(w, 404, map[string]string{"error": "no persistent guest, start daedald with -persistent-guest"})
+			return
+		}
+		writeJSON(w, 200, map[string]string{
+			"host": session.CurrentHost(),
+			"next": session.NextHost(),
+		})
+	})
+	mux.HandleFunc("GET /v1/migrations/guest", func(w http.ResponseWriter, r *http.Request) {
+		if session == nil {
+			writeJSON(w, 404, map[string]string{"error": "no persistent guest, start daedald with -persistent-guest"})
+			return
+		}
+		cfg, err := session.GuestMachineConfig()
+		if err != nil {
+			writeJSON(w, 502, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]any{
+			"host":           session.CurrentHost(),
+			"next":           session.NextHost(),
+			"api_sock":       session.GuestSock(),
+			"machine_config": json.RawMessage(cfg),
+		})
+	})
 	mux.HandleFunc("POST /v1/migrations", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			MemMiB     int64  `json:"mem_mib"`
@@ -214,6 +339,52 @@ func liveMigrateServe(args []string) {
 			To         string `json:"to"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		if session != nil {
+			if !inFlight.TryStart("persistent-guest") {
+				writeJSON(w, http.StatusConflict, map[string]string{
+					"error": "migration already in flight for the persistent guest",
+				})
+				return
+			}
+			defer inFlight.Finish("persistent-guest")
+
+			from, to := session.CurrentHost(), session.NextHost()
+			pub := &migrationProgressPublisher{bc: bc, migrationID: newMigrationID(from, to), targetMs: *target}
+			bc.Publish(map[string]any{
+				"type":         "migration_start",
+				"migration_id": pub.migrationID,
+				"from":         from,
+				"to":           to,
+			})
+			bc.Publish(map[string]any{
+				"type":         "migration_progress",
+				"migration_id": pub.migrationID,
+				"phase":        "precopy",
+			})
+
+			res, err := session.Migrate(pub.handle)
+			if err != nil {
+				pub.publishFailure(err)
+				writeJSON(w, 500, map[string]string{"error": err.Error()})
+				return
+			}
+			recordBlackout(res.BlackoutMs)
+			writeJSON(w, 200, map[string]any{
+				"migration_id":  pub.migrationID,
+				"from":          from,
+				"to":            to,
+				"current_host":  session.CurrentHost(),
+				"guest_mem_mib": *guestMemMiB,
+				"blackout_ms":   res.BlackoutMs,
+				"phases_ms":     res.PhasesMs,
+				"precopy_ms":    res.PrecopyMs,
+				"target_ms":     *target,
+				"pass":          res.BlackoutMs <= *target,
+			})
+			return
+		}
+
 		if req.From == "" {
 			req.From = "local-src"
 		}
@@ -230,7 +401,7 @@ func liveMigrateServe(args []string) {
 		}
 		defer inFlight.Finish(pairKey)
 
-		migrationID := pairKey + "-" + fmt.Sprintf("%d", time.Now().UnixNano())
+		pub := &migrationProgressPublisher{bc: bc, migrationID: newMigrationID(req.From, req.To), targetMs: *target}
 
 		cfg := base
 		cfg.WorkDir = "/tmp/daedal-lm-" + time.Now().Format("150405.000")
@@ -240,39 +411,17 @@ func liveMigrateServe(args []string) {
 		if req.MemBackend != "" {
 			cfg.MemBackend = req.MemBackend
 		}
-		cfg.Progress = func(ev livemigrate.Event) {
-			switch ev.Kind {
-			case livemigrate.EventCutoverStart:
-				bc.Publish(map[string]any{
-					"type":         "migration_progress",
-					"migration_id": migrationID,
-					"phase":        "cutover",
-				})
-			case livemigrate.EventLoadResumeComplete:
-				bc.Publish(map[string]any{
-					"type":         "migration_complete",
-					"migration_id": migrationID,
-					"blackout_ms":  ev.BlackoutMs,
-					"pass":         ev.BlackoutMs <= *target,
-				})
-			case livemigrate.EventRollback:
-				bc.Publish(map[string]any{
-					"type":         "migration_failed",
-					"migration_id": migrationID,
-					"error":        ev.Err.Error(),
-				})
-			}
-		}
+		cfg.Progress = pub.handle
 
 		bc.Publish(map[string]any{
 			"type":         "migration_start",
-			"migration_id": migrationID,
+			"migration_id": pub.migrationID,
 			"from":         req.From,
 			"to":           req.To,
 		})
 		bc.Publish(map[string]any{
 			"type":         "migration_progress",
-			"migration_id": migrationID,
+			"migration_id": pub.migrationID,
 			"phase":        "precopy",
 		})
 
@@ -281,14 +430,13 @@ func liveMigrateServe(args []string) {
 			defer handles.Close()
 		}
 		if err != nil {
+			pub.publishFailure(err)
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
-		mu.Lock()
-		blackouts = append(blackouts, res.BlackoutMs)
-		mu.Unlock()
+		recordBlackout(res.BlackoutMs)
 		writeJSON(w, 200, map[string]any{
-			"migration_id": migrationID,
+			"migration_id": pub.migrationID,
 			"blackout_ms":  res.BlackoutMs,
 			"phases_ms":    res.PhasesMs,
 			"precopy_ms":   res.PrecopyMs,
@@ -309,8 +457,13 @@ func liveMigrateServe(args []string) {
 		})
 	})
 
-	log.Printf("live-migration API listening on %s (target blackout %.0fms)", *listen, *target)
-	log.Fatal(http.ListenAndServe(*listen, withCORS(mux)))
+	if session != nil {
+		log.Printf("live-migration API listening on %s (persistent guest on %s, target blackout %.0fms)",
+			*listen, session.CurrentHost(), *target)
+	} else {
+		log.Printf("live-migration API listening on %s (target blackout %.0fms)", *listen, *target)
+	}
+	log.Fatal(http.Serve(ln, withCORS(mux)))
 }
 
 func withCORS(next http.Handler) http.Handler {

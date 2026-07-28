@@ -13,6 +13,7 @@ export function vncGatewayUrl(gatewayBase: string, vncNodeId: string): string {
 declare global {
   interface Window {
     __vncStatus?: Record<string, VncStatus>
+    __vncClients?: Record<string, RFB>
   }
 }
 
@@ -27,7 +28,12 @@ export function useVncScreen(
   gatewayBase: string,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const clientRef = useRef<RFB | null>(null)
   const [status, setStatus] = useState<VncStatus>('idle')
+
+  const focus = () => {
+    clientRef.current?.focus()
+  }
 
   useEffect(() => {
     const container = containerRef.current
@@ -68,6 +74,10 @@ export function useVncScreen(
       rfb.scaleViewport = true
       rfb.resizeSession = false
       rfb.viewOnly = false
+      rfb.focusOnClick = true
+      clientRef.current = rfb
+      if (!window.__vncClients) window.__vncClients = {}
+      window.__vncClients[nodeKey] = rfb
       rfb.addEventListener('connect', () => {
         attempt = 0
         apply('connected')
@@ -89,5 +99,5 @@ export function useVncScreen(
     }
   }, [nodeKey, vncNodeId, gatewayBase])
 
-  return { containerRef, status }
+  return { containerRef, status, focus }
 }
