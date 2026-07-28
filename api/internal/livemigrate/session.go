@@ -47,7 +47,13 @@ func StartSession(c Config, hosts [2]HostSpec) (*Session, error) {
 	}
 
 	s := &Session{cfg: c, hosts: hosts}
-	fc, err := spawnFirecracker(c.FirecrackerBin, s.sock(0), s.log(0))
+	for i := range hosts {
+		if firecrackerAlive(s.sock(i)) {
+			return nil, fmt.Errorf("a Firecracker is already live on %s (%s) and may still hold %s read-write; stop it before starting a persistent session",
+				hosts[i].Name, s.sock(i), c.Guest.RootfsPath)
+		}
+	}
+	fc, err := spawnFirecracker(c.FirecrackerBin, s.sock(0), s.log(0), s.console(0))
 	if err != nil {
 		return nil, fmt.Errorf("firecracker on %s: %w", hosts[0].Name, err)
 	}
@@ -69,6 +75,16 @@ func (s *Session) sock(i int) string {
 
 func (s *Session) log(i int) string {
 	return filepath.Join(s.cfg.WorkDir, s.hosts[i].Name+".log")
+}
+
+func (s *Session) console(i int) string {
+	return filepath.Join(s.cfg.WorkDir, s.hosts[i].Name+".console")
+}
+
+func (s *Session) ConsolePath() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.console(s.current)
 }
 
 func (s *Session) slotPaths(slot int) paths {
@@ -142,7 +158,7 @@ func (s *Session) Migrate(progress ProgressFunc) (*Result, error) {
 		return nil, fmt.Errorf("precopy on %s: %w", s.hosts[s.current].Name, err)
 	}
 
-	dstFc, err := spawnFirecracker(c.FirecrackerBin, p.dstSock, p.dstLog)
+	dstFc, err := spawnFirecracker(c.FirecrackerBin, p.dstSock, p.dstLog, s.console(dst))
 	if err != nil {
 		s.removeSlot(nextSlot)
 		return nil, fmt.Errorf("firecracker on %s: %w", s.hosts[dst].Name, err)

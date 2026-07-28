@@ -79,11 +79,14 @@ export function useMigrationEvents(options: UseMigrationEventsOptions): void {
     ): void => {
       const targetEdgeId = optionsRef.current.edgeId
       optionsRef.current.setEdges((prevEdges) =>
-        prevEdges.map((edge) =>
-          edge.id === targetEdgeId && edge.data
-            ? { ...edge, data: { ...edge.data, ...flags } }
-            : edge,
-        ),
+        prevEdges.map((edge) => {
+          if (edge.id !== targetEdgeId || !edge.data) {
+            return edge
+          }
+          const data = { ...edge.data, ...flags }
+          const visible = data.migrating || data.holding || data.fadingOut
+          return { ...edge, data, hidden: !visible }
+        }),
       )
     }
 

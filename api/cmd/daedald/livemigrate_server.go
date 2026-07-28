@@ -328,6 +328,7 @@ func liveMigrateServe(args []string) {
 			"host":           session.CurrentHost(),
 			"next":           session.NextHost(),
 			"api_sock":       session.GuestSock(),
+			"console":        session.ConsolePath(),
 			"machine_config": json.RawMessage(cfg),
 		})
 	})

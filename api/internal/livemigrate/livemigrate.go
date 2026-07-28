@@ -110,7 +110,7 @@ func openFirecracker(c *Config, sock, logPath string) (*fcProcess, error) {
 	if c.Attach {
 		return attachFirecracker(sock)
 	}
-	return spawnFirecracker(c.FirecrackerBin, sock, logPath)
+	return spawnFirecracker(c.FirecrackerBin, sock, logPath, "")
 }
 
 func precopy(c *Config, p paths, src *fcProcess, res *Result) error {

@@ -9,17 +9,24 @@ GUEST_IP=${GUEST_IP:-172.20.0.3}
 GUEST_MAC=${GUEST_MAC:-06:00:AC:14:00:03}
 HOST_A=${HOST_A:-host-a}
 HOST_B=${HOST_B:-host-b}
-TAP_A=${TAP_A:-tap-desk-a}
-TAP_B=${TAP_B:-tap-desk-b}
+TAP_A=${TAP_A:-tap-lm-a}
+TAP_B=${TAP_B:-tap-lm-b}
 DESK_IMG=${DESK_IMG:-rootfs-desktop}
 GUEST_MEM_MIB=${GUEST_MEM_MIB:-1024}
 GUEST_VCPUS=${GUEST_VCPUS:-2}
 PRECOPY_ROUNDS=${PRECOPY_ROUNDS:-3}
+PIN_IP=${PIN_IP:-172.20.0.4}
+PIN_MAC=${PIN_MAC:-06:00:AC:14:00:04}
+PIN_TAP=${PIN_TAP:-tap-lm-pin}
+PIN_IMG=${PIN_IMG:-rootfs-desktop-b}
+PIN_RUN=${PIN_RUN:-/tmp/fc-desktop-pin}
 DAEDALD_LISTEN=${DAEDALD_LISTEN:-127.0.0.1:7040}
 SHARED_LM=${SHARED_LM:-/dev/shm/daedal-desk}
 SESSION_WORK=${SESSION_WORK:-/tmp/daedal-lm-session}
-AGENT_KEYFILE=${AGENT_KEYFILE:-/tmp/agent-desk.key}
-AGENT_LOG=${AGENT_LOG:-/tmp/vnc-agent-desk.log}
+AGENT_KEY_MIG=${AGENT_KEY_MIG:-/tmp/agent-desk-mig.key}
+AGENT_LOG_MIG=${AGENT_LOG_MIG:-/tmp/vnc-agent-mig.log}
+AGENT_KEY_PIN=${AGENT_KEY_PIN:-/tmp/agent-desk-pin.key}
+AGENT_LOG_PIN=${AGENT_LOG_PIN:-/tmp/vnc-agent-pin.log}
 GATEWAY_TARGET=${GATEWAY_TARGET:-/tmp/gateway-target}
 WEB_PORT=${WEB_PORT:-5173}
 
@@ -39,7 +46,12 @@ vm_run "test -f $IMAGES/$DESK_IMG.ext4" || {
   echo "    bash scripts/build-desktop-rootfs.sh" >&2
   exit 1
 }
-echo "vm=$DAEDAL_VM running, go/cargo/npm present, $DESK_IMG.ext4 present"
+if ! vm_run "test -f $IMAGES/$PIN_IMG.ext4"; then
+  echo "$PIN_IMG.ext4 missing -- building the second desktop image ($PIN_IP)"
+  vm_run "cd $ROOT && GUEST_IP=$PIN_IP IMG_NAME=$PIN_IMG GUEST_HOSTNAME=daedal-desktop-b DAEDAL_NO_FORWARD=1 bash scripts/build-desktop-rootfs.sh" \
+    || { echo "ERROR: could not build $PIN_IMG.ext4" >&2; exit 1; }
+fi
+echo "vm=$DAEDAL_VM running, go/cargo/npm present, $DESK_IMG.ext4 and $PIN_IMG.ext4 present"
 
 echo "=== rebuild daedald for linux/arm64 (macOS cross-compile, no cgo) ==="
 mkdir -p "$ROOT/bin"
@@ -53,11 +65,16 @@ vm_run "for p in \$(sudo ss -H -ltnp 'sport = :${DAEDALD_LISTEN##*:}' 2>/dev/nul
   sudo kill \$p 2>/dev/null || true
 done
 if [ -f /tmp/fc-desktop/fc.pid ]; then sudo kill \$(cat /tmp/fc-desktop/fc.pid) 2>/dev/null || true; fi
-for p in \$(pgrep -x firecracker 2>/dev/null); do
-  if tr '\\0' ' ' < /proc/\$p/cmdline 2>/dev/null | grep -q '$SESSION_WORK'; then
-    echo \"killing stale session firecracker pid \$p\"
-    sudo kill \$p 2>/dev/null || true
-  fi
+if [ -f $PIN_RUN/fc.pid ]; then sudo kill \$(cat $PIN_RUN/fc.pid) 2>/dev/null || true; fi
+for d in /proc/[0-9]*; do
+  comm=\$(cat \$d/comm 2>/dev/null) || continue
+  case \"\$comm\" in firecracker*) ;; *) continue ;; esac
+  case \"\$(tr '\\0' ' ' < \$d/cmdline 2>/dev/null)\" in
+    *$SESSION_WORK*)
+      echo \"killing stale session firecracker pid \${d#/proc/} (\$comm)\"
+      sudo kill \${d#/proc/} 2>/dev/null || true
+      ;;
+  esac
 done
 sleep 1
 echo stopped"
@@ -81,6 +98,7 @@ for t in $TAP_A $TAP_B; do
   sudo ip link set \$t master $BR
   sudo ip link set \$t up
 done
+sudo pkill -x vnc-tunnel-agent 2>/dev/null || true
 sudo rm -rf $SHARED_LM $SESSION_WORK
 mkdir -p $SHARED_LM $SESSION_WORK
 chmod 777 $SHARED_LM
@@ -119,31 +137,55 @@ echo
 CURRENT_HOST=$(curl -s "http://$DAEDALD_LISTEN/v1/migrations/current-host" | sed -n 's/.*"host":"\([^"]*\)".*/\1/p')
 echo "persistent guest currently on: ${CURRENT_HOST:-unknown}"
 
-echo "=== vnc-tunnel-agent (one agent on the bridge; the guest keeps $GUEST_IP on both hosts) ==="
-vm_run "sudo pkill -x vnc-tunnel-agent 2>/dev/null || true
-sleep 0.3
-rm -f $AGENT_LOG
-AGENT=$GATEWAY_TARGET/release/vnc-tunnel-agent
+echo "=== boot the PINNED second desktop guest ($PIN_IP, tap $PIN_TAP, never migrated) ==="
+vm_run "sudo e2fsck -fy $IMAGES/$PIN_IMG.ext4 2>&1 | tail -3"
+vm_run "cd $ROOT && DAEDAL_NO_FORWARD=1 BR=$BR TAP=$PIN_TAP HOST_IP=$HOST_IP GUEST_MAC=$PIN_MAC RUN=$PIN_RUN ROOTFS=$IMAGES/$PIN_IMG.ext4 bash scripts/boot-desktop.sh 2>&1 | tail -3"
+
+echo "=== wait for both desktops to serve VNC ==="
+vm_run "banner(){ timeout 3 bash -c \"exec 3<>/dev/tcp/\\\$1/5901; head -c 12 <&3\" 2>/dev/null; }
+for i in \$(seq 1 150); do
+  a=\$(banner $GUEST_IP); b=\$(banner $PIN_IP)
+  if [ -n \"\$a\" ] && [ -n \"\$b\" ]; then echo \"BOTH_VNC_UP after \${i}s: migrating=[\$a] pinned=[\$b]\"; break; fi
+  sleep 1
+done
+echo \"migrating $GUEST_IP:5901 banner=[\$(banner $GUEST_IP)] pinned $PIN_IP:5901 banner=[\$(banner $PIN_IP)]\""
+
+echo "=== two vnc-tunnel-agents, one per desktop, persistent keyfiles ==="
+vm_run "AGENT=$GATEWAY_TARGET/release/vnc-tunnel-agent
 if [ ! -x \"\$AGENT\" ]; then
   ( cd $ROOT/gateway && CARGO_TARGET_DIR=$GATEWAY_TARGET cargo build --release -p vnc-tunnel-agent ) >/tmp/agent-build.log 2>&1
 fi
 if [ ! -x \"\$AGENT\" ]; then echo 'ERROR: no vnc-tunnel-agent binary, see /tmp/agent-build.log'; exit 1; fi
-setsid \$AGENT --keyfile $AGENT_KEYFILE --vnc-addr $GUEST_IP:5901 < /dev/null > $AGENT_LOG 2>&1 &
-for i in \$(seq 1 30); do grep -q 'node id' $AGENT_LOG 2>/dev/null && break; sleep 1; done
-cat $AGENT_LOG"
-NODE_ID=$(vm_run "cat $AGENT_LOG 2>/dev/null" | grep -o 'node id: [0-9a-f]\{64\}' | head -1 | awk '{print $NF}')
-echo "vnc-tunnel-agent EndpointId: ${NODE_ID:-<not printed, see $AGENT_LOG>}"
-
-echo "=== register the tunnel node id for both hosts ==="
-if [ -n "${NODE_ID:-}" ]; then
-  for h in "$HOST_A" "$HOST_B"; do
-    curl -s -X POST "http://$DAEDALD_LISTEN/v1/hosts/$h/vnc-endpoint" \
-      -H 'Content-Type: application/json' -d "{\"node_id\":\"$NODE_ID\"}" >/dev/null
-  done
-  echo "registered: $(curl -s "http://$DAEDALD_LISTEN/v1/hosts")"
-else
-  echo "SKIP: no EndpointId to register"
+rm -f $AGENT_LOG_MIG $AGENT_LOG_PIN
+setsid \$AGENT --keyfile $AGENT_KEY_MIG --vnc-addr $GUEST_IP:5901 < /dev/null > $AGENT_LOG_MIG 2>&1 &
+setsid \$AGENT --keyfile $AGENT_KEY_PIN --vnc-addr $PIN_IP:5901 < /dev/null > $AGENT_LOG_PIN 2>&1 &
+for i in \$(seq 1 40); do
+  grep -q 'node id' $AGENT_LOG_MIG 2>/dev/null && grep -q 'node id' $AGENT_LOG_PIN 2>/dev/null && break
+  sleep 1
+done
+echo \"migrating-desktop agent: \$(cat $AGENT_LOG_MIG)\"
+echo \"pinned-desktop agent:    \$(cat $AGENT_LOG_PIN)\""
+NODE_ID_MIG=$(vm_run "cat $AGENT_LOG_MIG 2>/dev/null" | grep -o 'node id: [0-9a-f]\{64\}' | head -1 | awk '{print $NF}')
+NODE_ID_PIN=$(vm_run "cat $AGENT_LOG_PIN 2>/dev/null" | grep -o 'node id: [0-9a-f]\{64\}' | head -1 | awk '{print $NF}')
+echo "migrating desktop EndpointId: ${NODE_ID_MIG:-<none>}"
+echo "pinned desktop EndpointId:    ${NODE_ID_PIN:-<none>}"
+if [ -n "${NODE_ID_MIG:-}" ] && [ "${NODE_ID_MIG:-}" = "${NODE_ID_PIN:-}" ]; then
+  echo "ERROR: both agents printed the same EndpointId; the two desktop cards would show one guest twice" >&2
+  exit 1
 fi
+
+echo "=== register the two DISTINCT endpoints: $HOST_A -> migrating desktop, $HOST_B -> pinned desktop ==="
+reg() {
+  if [ -n "$2" ]; then
+    curl -s -X POST "http://$DAEDALD_LISTEN/v1/hosts/$1/vnc-endpoint" \
+      -H 'Content-Type: application/json' -d "{\"node_id\":\"$2\"}" >/dev/null
+  else
+    echo "SKIP: no EndpointId for $1"
+  fi
+}
+reg "$HOST_A" "${NODE_ID_MIG:-}"
+reg "$HOST_B" "${NODE_ID_PIN:-}"
+echo "registered: $(curl -s "http://$DAEDALD_LISTEN/v1/hosts")"
 
 echo "=== vnc-ws-gateway on the macOS host ==="
 GATEWAY_LOG=/tmp/vnc-ws-gateway.log
@@ -177,13 +219,20 @@ fi
 
 echo
 echo "=== demo URL ==="
-echo "http://localhost:$WEB_PORT/?vnc=${NODE_ID:-MISSING}&owner=${CURRENT_HOST:-$HOST_A}"
+echo "http://localhost:$WEB_PORT/"
+echo "  (the frontend reads both desktop endpoints from GET /v1/hosts; no URL params needed)"
+echo "  explicit form: http://localhost:$WEB_PORT/?nodeA=${NODE_ID_MIG:-MISSING}&nodeB=${NODE_ID_PIN:-MISSING}"
 echo
 echo "daedald API:        http://$DAEDALD_LISTEN"
 echo "current host:       $(curl -s "http://$DAEDALD_LISTEN/v1/migrations/current-host")"
+echo "guest detail:       $(curl -s "http://$DAEDALD_LISTEN/v1/migrations/guest")"
 echo "vnc-ws-gateway:     ${GATEWAY_ADDR:-not started}"
-echo "tunnel EndpointId:  ${NODE_ID:-none}"
-echo "guest:              $GUEST_IP:5901, ${GUEST_MEM_MIB}MiB, migrating between $HOST_A ($TAP_A) and $HOST_B ($TAP_B)"
+echo "registry:           $(curl -s "http://$DAEDALD_LISTEN/v1/hosts")"
 echo
-echo "Clicking Migrate live-migrates THIS desktop guest between the two hosts; it is never rebooted."
+echo "$HOST_A -> desktop-a: the MIGRATING guest, $GUEST_IP:5901, ${GUEST_MEM_MIB}MiB, tunnel ${NODE_ID_MIG:-none}"
+echo "$HOST_B -> desktop-b: the PINNED guest,    $PIN_IP:5901, tunnel ${NODE_ID_PIN:-none}"
+echo
+echo "Clicking Migrate live-migrates the desktop-a guest between $HOST_A ($TAP_A) and $HOST_B ($TAP_B)."
+echo "It is never rebooted and keeps $GUEST_IP, so its VNC stream stays on the same tunnel throughout."
+echo "The desktop-b guest is pinned and never migrates, so the two cards are always two different machines."
 echo DESKTOP_MIGRATION_DEMO_STARTED

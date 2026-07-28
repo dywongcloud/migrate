@@ -15,13 +15,26 @@ import (
 )
 
 type fcProcess struct {
-	cmd    *exec.Cmd
-	sock   string
-	client *http.Client
-	logF   *os.File
+	cmd     *exec.Cmd
+	sock    string
+	client  *http.Client
+	logF    *os.File
+	consolF *os.File
 }
 
-func spawnFirecracker(binPath, sock, logPath string) (*fcProcess, error) {
+func openConsoleFifo(path string) (*os.File, error) {
+	_ = os.Remove(path)
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		return nil, fmt.Errorf("mkfifo %s: %w", path, err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	return f, nil
+}
+
+func spawnFirecracker(binPath, sock, logPath, consoleFifo string) (*fcProcess, error) {
 	_ = os.Remove(sock)
 	logF, err := os.Create(logPath)
 	if err != nil {
@@ -31,11 +44,23 @@ func spawnFirecracker(binPath, sock, logPath string) (*fcProcess, error) {
 	cmd.Stdout = logF
 	cmd.Stderr = logF
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var consolF *os.File
+	if consoleFifo != "" {
+		consolF, err = openConsoleFifo(consoleFifo)
+		if err != nil {
+			logF.Close()
+			return nil, err
+		}
+		cmd.Stdin = consolF
+	}
 	if err := cmd.Start(); err != nil {
 		logF.Close()
+		if consolF != nil {
+			consolF.Close()
+		}
 		return nil, fmt.Errorf("spawn firecracker: %w", err)
 	}
-	fc := &fcProcess{cmd: cmd, sock: sock, logF: logF, client: unixClient(sock)}
+	fc := &fcProcess{cmd: cmd, sock: sock, logF: logF, consolF: consolF, client: unixClient(sock)}
 	if err := fc.waitReady(5 * time.Second); err != nil {
 		fc.kill()
 		return nil, err
@@ -49,6 +74,15 @@ func attachFirecracker(sock string) (*fcProcess, error) {
 		return nil, err
 	}
 	return fc, nil
+}
+
+func firecrackerAlive(sock string) bool {
+	if _, err := os.Stat(sock); err != nil {
+		return false
+	}
+	probe := &fcProcess{sock: sock, client: unixClient(sock)}
+	probe.client.Timeout = 2 * time.Second
+	return probe.call("GET", "/version", nil) == nil
 }
 
 func unixClient(sock string) *http.Client {
@@ -170,6 +204,9 @@ func (p *fcProcess) loadAndResume(statePath, backendType, backendPath string, ne
 func (p *fcProcess) kill() {
 	if p.logF != nil {
 		p.logF.Close()
+	}
+	if p.consolF != nil {
+		p.consolF.Close()
 	}
 	if p.cmd == nil {
 		return

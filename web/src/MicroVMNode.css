@@ -1,71 +1,32 @@
 .microvm-node {
-  width: 220px;
-  border-radius: 8px;
-  border: 2px solid #3a3a3a;
-  background: #1e1e1e;
-  color: #eee;
-  font-family: system-ui, sans-serif;
-  padding: 8px;
+  width: 340px;
 }
 
-.microvm-node-header {
+.microvm-inner {
+  padding: 18px 20px;
+}
+
+.microvm-stats {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.microvm-node-label {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.microvm-node-status {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #3a3a3a;
-  text-transform: capitalize;
-}
-
-.microvm-node-status-running {
-  background: #1f6f3f;
-}
-
-.microvm-node-status-migrating {
-  background: #a06a10;
-}
-
-.microvm-node-status-idle {
-  background: #444;
-}
-
-.microvm-node-screen {
-  height: 120px;
-  border-radius: 4px;
-  background: #000;
-  display: flex;
+.microvm-stat {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 5px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--turbo-dim);
+  background: var(--turbo-panel);
+  border: 1px solid #263140;
+  border-radius: 5px;
+  padding: 3px 7px;
 }
 
-.microvm-node-screen-placeholder {
-  color: #666;
-  font-size: 11px;
-}
-
-@keyframes microvm-node-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(64, 220, 120, 0.75);
-    border-color: #40dc78;
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(64, 220, 120, 0);
-    border-color: #3a3a3a;
-  }
-}
-
-.microvm-node-highlight {
-  animation: microvm-node-pulse 0.6s ease-in-out 3;
+.microvm-stat svg {
+  color: var(--turbo-blue);
 }

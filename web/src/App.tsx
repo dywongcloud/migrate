@@ -3,10 +3,12 @@ import {
   ReactFlow,
   Background,
   Controls,
+  applyNodeChanges,
   type Node,
   type Edge,
   type NodeTypes,
   type EdgeTypes,
+  type NodeChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import type { HostNodeData, DesktopNodeData, MigrationEdgeData } from './types'
@@ -38,6 +40,12 @@ interface HostRegistryEntry {
 }
 
 type HostsStatus = 'loading' | 'ready' | 'unreachable'
+
+declare global {
+  interface Window {
+    __applyNodeChanges?: (changes: NodeChange<GraphNode>[]) => void
+  }
+}
 
 const nodeTypes: NodeTypes = { microvm: MicroVMNode, desktop: DesktopNode }
 const edgeTypes: EdgeTypes = { migration: MigrationEdge }
@@ -72,7 +80,8 @@ const initialNodes: GraphNode[] = [
   {
     id: 'desktop-a',
     type: 'desktop',
-    position: { x: 0, y: 170 },
+    position: { x: 0, y: 200 },
+    dragHandle: '.desktop-drag-handle',
     data: {
       id: 'desktop-a',
       label: 'XFCE desktop (host A) -- VNC over iroh',
@@ -83,7 +92,8 @@ const initialNodes: GraphNode[] = [
   {
     id: 'desktop-b',
     type: 'desktop',
-    position: { x: 760, y: 170 },
+    position: { x: 700, y: 200 },
+    dragHandle: '.desktop-drag-handle',
     data: {
       id: 'desktop-b',
       label: 'XFCE desktop (host B) -- VNC over iroh',
@@ -99,6 +109,7 @@ const initialEdges: Edge<MigrationEdgeData>[] = [
     type: 'migration',
     source: 'host-a',
     target: 'host-b',
+    hidden: true,
     data: {
       id: MIGRATION_EDGE_ID,
       source: 'host-a',
@@ -174,6 +185,11 @@ function App() {
     initial.overridden ? 'ready' : 'loading',
   )
 
+  const onNodesChange = (changes: NodeChange<GraphNode>[]) => {
+    setNodes((prevNodes) => applyNodeChanges(changes, prevNodes))
+  }
+  window.__applyNodeChanges = onNodesChange
+
   const setHttpLabel = (label: string, ok: boolean) => {
     setEdges((prevEdges) =>
       prevEdges.map((edge) =>
@@ -246,8 +262,11 @@ function App() {
         <ReactFlow
           nodes={nodes}
           edges={[...desktopEdges, ...edges] as Edge[]}
+          onNodesChange={onNodesChange}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
+          nodesDraggable
+          minZoom={0.2}
           fitView
         >
           <Background />

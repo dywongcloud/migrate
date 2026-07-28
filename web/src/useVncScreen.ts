@@ -14,8 +14,33 @@ declare global {
   interface Window {
     __vncStatus?: Record<string, VncStatus>
     __vncClients?: Record<string, RFB>
+    __vncTxBytes?: number
+    __vncTxHooked?: boolean
   }
 }
+
+function hookOutboundByteCounter() {
+  if (typeof window === 'undefined' || window.__vncTxHooked) {
+    return
+  }
+  window.__vncTxHooked = true
+  window.__vncTxBytes = 0
+  const original = WebSocket.prototype.send
+  WebSocket.prototype.send = function patched(this: WebSocket, data: Parameters<WebSocket['send']>[0]) {
+    const size =
+      typeof data === 'string'
+        ? data.length
+        : data instanceof ArrayBuffer
+          ? data.byteLength
+          : 'byteLength' in (data as ArrayBufferView)
+            ? (data as ArrayBufferView).byteLength
+            : 0
+    window.__vncTxBytes = (window.__vncTxBytes ?? 0) + size
+    return original.call(this, data)
+  }
+}
+
+hookOutboundByteCounter()
 
 function publishStatus(nodeKey: string, status: VncStatus) {
   if (!window.__vncStatus) window.__vncStatus = {}
