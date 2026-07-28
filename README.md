@@ -1,4 +1,4 @@
-# daedal -- Firecracker live VM migration with <= 30 ms blackout
+# Firecracker live VM migration with <= 30 ms blackout
 
 `daedal` live-migrates a running [Firecracker](https://github.com/firecracker-microvm/firecracker)
 microVM from one host to another with a **guest blackout (the time the guest is
