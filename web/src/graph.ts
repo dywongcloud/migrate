@@ -1,6 +1,5 @@
 import type { Node, Edge } from '@xyflow/react'
 import type {
-  HostNodeData,
   DesktopNodeData,
   GroupNodeData,
   ComponentNodeData,
@@ -9,7 +8,6 @@ import type {
 } from './types'
 
 export type GraphNode =
-  | Node<HostNodeData>
   | Node<DesktopNodeData>
   | Node<GroupNodeData>
   | Node<ComponentNodeData>
@@ -17,8 +15,8 @@ export type GraphNode =
 export const MIGRATION_EDGE_ID = 'host-a-host-b'
 
 export const HOST_NODE_IDS: Record<string, string> = {
-  'host-a': 'host-a',
-  'host-b': 'host-b',
+  'host-a': 'host-a-group',
+  'host-b': 'host-b-group',
 }
 
 export const GROUP_BY_HOST: Record<string, string> = {
@@ -39,14 +37,12 @@ export const VNC_PARAM_BY_DESKTOP: Record<string, string> = {
 const GAP = 24
 const COMPONENT_WIDTH = 258
 const COMPONENT_HEIGHT = 44
-const HOST_CARD_HEIGHT = 112
-const GROUP_HEADER_HEIGHT = 54
+const GROUP_HEADER_HEIGHT = 96
 
 const COL_A = GAP
 const COL_B = GAP + COMPONENT_WIDTH + GAP
 const GROUP_WIDTH = COL_B + COMPONENT_WIDTH + GAP
-const HOST_CARD_Y = GROUP_HEADER_HEIGHT + GAP
-const COMPONENT_TOP = HOST_CARD_Y + HOST_CARD_HEIGHT + GAP
+const COMPONENT_TOP = GROUP_HEADER_HEIGHT + GAP
 const COMPONENT_PITCH = COMPONENT_HEIGHT + GAP
 const COMPONENT_ROW_COUNT = 4
 const GROUP_HEIGHT =
@@ -94,21 +90,7 @@ export function buildNodes(): GraphNode[] {
       data: {
         id: groupId,
         label: `${spec.label} microVM`,
-        detail: `firecracker + guest ${spec.guestIp}`,
-        migrationHighlight: false,
-      },
-    })
-
-    nodes.push({
-      id: spec.host,
-      type: 'microvm',
-      parentId: groupId,
-      extent: 'parent',
-      position: { x: COL_A, y: HOST_CARD_Y },
-      data: {
-        id: spec.host,
-        label: spec.label,
-        hostAddr: spec.guestIp,
+        detail: `guest ${spec.guestIp} on ${spec.tap}`,
         status: 'running',
         migrationHighlight: false,
       },
@@ -155,7 +137,7 @@ export function buildComponentEdges(): Edge[] {
   HOSTS.forEach((spec) => {
     edges.push({
       id: `${spec.host}-to-desktop`,
-      source: spec.host,
+      source: GROUP_BY_HOST[spec.host],
       sourceHandle: 'desktop',
       target: DESKTOP_BY_HOST[spec.host],
       label: 'VNC over iroh',
@@ -172,13 +154,13 @@ export function buildMigrationEdges(): Edge<MigrationEdgeData>[] {
     {
       id: MIGRATION_EDGE_ID,
       type: 'migration',
-      source: 'host-a',
-      target: 'host-b',
+      source: 'host-a-group',
+      target: 'host-b-group',
       hidden: true,
       data: {
         id: MIGRATION_EDGE_ID,
-        source: 'host-a',
-        target: 'host-b',
+        source: 'host-a-group',
+        target: 'host-b-group',
         migrating: false,
         holding: false,
         fadingOut: false,

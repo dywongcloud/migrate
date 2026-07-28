@@ -11,13 +11,12 @@ import {
   type NodeChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import type { HostNodeData, DesktopNodeData, MigrationEdgeData } from './types'
-import { MicroVMNode } from './MicroVMNode'
+import type { DesktopNodeData, MigrationEdgeData } from './types'
 import { DesktopNode } from './DesktopNode'
 import { GroupNode } from './GroupNode'
 import { ComponentNode } from './ComponentNode'
 import { MigrationEdge } from './MigrationEdge'
-import { useMigrationEvents } from './useMigrationEvents'
+import { useMigrationEvents, type HighlightableNode } from './useMigrationEvents'
 import { MigrateButton } from './MigrateButton'
 import {
   buildNodes,
@@ -48,7 +47,6 @@ declare global {
 }
 
 const nodeTypes: NodeTypes = {
-  microvm: MicroVMNode,
   desktop: DesktopNode,
   vmgroup: GroupNode,
   component: ComponentNode,
@@ -157,7 +155,7 @@ function App() {
   }, [])
 
   useMigrationEvents({
-    setNodes: setNodes as React.Dispatch<React.SetStateAction<Node<HostNodeData>[]>>,
+    setNodes: setNodes as React.Dispatch<React.SetStateAction<HighlightableNode[]>>,
     setEdges,
     edgeId: MIGRATION_EDGE_ID,
     hostNodeIds: HOST_NODE_IDS,

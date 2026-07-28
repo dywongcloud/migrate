@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import type { Node, Edge } from '@xyflow/react'
-import type { MicroVMNodeData, MigrationEdgeData } from './types'
+import type { MigrationEdgeData } from './types'
+
+export type HighlightableNode = Node<Record<string, unknown>>
 
 export type MigrationEventType =
   | 'migration_start'
@@ -33,7 +35,7 @@ export interface UseMigrationEventsOptions {
   hostNodeIds?: Record<string, string>
   groupNodeIds?: Record<string, string>
   edgeId: string
-  setNodes: Dispatch<SetStateAction<Node<MicroVMNodeData>[]>>
+  setNodes: Dispatch<SetStateAction<HighlightableNode[]>>
   setEdges: Dispatch<SetStateAction<Edge<MigrationEdgeData>[]>>
   onOwnerChanged?: (toHostId: string) => void
 }

@@ -1,16 +1,8 @@
-export interface HostNodeData {
-  id: string;
-  label: string;
-  hostAddr: string;
-  status: 'running' | 'migrating' | 'idle';
-  migrationHighlight: boolean;
-  [key: string]: unknown;
-}
-
 export interface GroupNodeData {
   id: string;
   label: string;
   detail: string;
+  status: 'running' | 'migrating' | 'idle';
   migrationHighlight: boolean;
   [key: string]: unknown;
 }
@@ -32,8 +24,6 @@ export interface DesktopNodeData {
   vncNodeId: string;
   [key: string]: unknown;
 }
-
-export type MicroVMNodeData = HostNodeData;
 
 export interface MigrationEdgeData {
   id: string;
