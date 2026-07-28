@@ -1,6 +1,5 @@
 # Firecracker live VM migration with <= 30 ms blackout
-
-`daedal` live-migrates a running [Firecracker](https://github.com/firecracker-microvm/firecracker)
+Live-migrates a running [Firecracker](https://github.com/firecracker-microvm/firecracker)
 microVM from one host to another with a **guest blackout (the time the guest is
 executing on neither host) in the single-digit milliseconds**, while a workload
 running inside the guest keeps serving without a dropped connection.
