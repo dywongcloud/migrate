@@ -16,22 +16,26 @@ import { MicroVMNode } from './MicroVMNode'
 import { DesktopNode } from './DesktopNode'
 import { MigrationEdge } from './MigrationEdge'
 import { useMigrationEvents } from './useMigrationEvents'
-import { MigrateButton } from './MigrateButton'
+import { MigrateButton, DEFAULT_API_BASE } from './MigrateButton'
 import './App.toolbar.css'
 
-const HOSTS_URL = 'http://localhost:7040/v1/hosts'
+const HOSTS_URL = `${DEFAULT_API_BASE}/v1/hosts`
+const GUEST_URL = `${DEFAULT_API_BASE}/v1/migrations/guest`
+const CURRENT_HOST_URL = `${DEFAULT_API_BASE}/v1/migrations/current-host`
 const MIGRATION_EDGE_ID = 'host-a-host-b'
+const HOST_A = 'host-a'
+const HOST_B = 'host-b'
 const HOST_NODE_IDS: Record<string, string> = {
-  'host-a': 'host-a',
-  'host-b': 'host-b',
+  [HOST_A]: HOST_A,
+  [HOST_B]: HOST_B,
 }
 const DESKTOP_BY_HOST: Record<string, string> = {
-  'host-a': 'desktop-a',
-  'host-b': 'desktop-b',
+  [HOST_A]: 'desktop-a',
+  [HOST_B]: 'desktop-b',
 }
-const VNC_PARAM_BY_DESKTOP: Record<string, string> = {
-  'desktop-a': 'nodeA',
-  'desktop-b': 'nodeB',
+const HOST_LABELS: Record<string, string> = {
+  [HOST_A]: 'host A',
+  [HOST_B]: 'host B',
 }
 
 interface HostRegistryEntry {
@@ -39,11 +43,14 @@ interface HostRegistryEntry {
   node_id: string
 }
 
-type HostsStatus = 'loading' | 'ready' | 'unreachable'
+interface GuestResponse {
+  host?: string
+}
 
 declare global {
   interface Window {
     __applyNodeChanges?: (changes: NodeChange<GraphNode>[]) => void
+    __desktopOwner?: { host: string; desktop: string; vncNodeId: string; source: string }
   }
 }
 
@@ -54,11 +61,11 @@ type GraphNode = Node<HostNodeData> | Node<DesktopNodeData>
 
 const initialNodes: GraphNode[] = [
   {
-    id: 'host-a',
+    id: HOST_A,
     type: 'microvm',
     position: { x: 40, y: 0 },
     data: {
-      id: 'host-a',
+      id: HOST_A,
       label: 'Host A',
       hostAddr: '',
       status: 'running',
@@ -66,11 +73,11 @@ const initialNodes: GraphNode[] = [
     },
   },
   {
-    id: 'host-b',
+    id: HOST_B,
     type: 'microvm',
     position: { x: 800, y: 0 },
     data: {
-      id: 'host-b',
+      id: HOST_B,
       label: 'Host B',
       hostAddr: '',
       status: 'running',
@@ -84,8 +91,8 @@ const initialNodes: GraphNode[] = [
     dragHandle: '.desktop-drag-handle',
     data: {
       id: 'desktop-a',
-      label: 'XFCE desktop (host A) -- VNC over iroh',
-      hostId: 'host-a',
+      label: '',
+      hostId: HOST_A,
       vncNodeId: '',
     },
   },
@@ -96,8 +103,8 @@ const initialNodes: GraphNode[] = [
     dragHandle: '.desktop-drag-handle',
     data: {
       id: 'desktop-b',
-      label: 'XFCE desktop (host B) -- VNC over iroh',
-      hostId: 'host-b',
+      label: '',
+      hostId: HOST_B,
       vncNodeId: '',
     },
   },
@@ -107,13 +114,13 @@ const initialEdges: Edge<MigrationEdgeData>[] = [
   {
     id: MIGRATION_EDGE_ID,
     type: 'migration',
-    source: 'host-a',
-    target: 'host-b',
+    source: HOST_A,
+    target: HOST_B,
     hidden: true,
     data: {
       id: MIGRATION_EDGE_ID,
-      source: 'host-a',
-      target: 'host-b',
+      source: HOST_A,
+      target: HOST_B,
       migrating: false,
       holding: false,
       fadingOut: false,
@@ -123,67 +130,68 @@ const initialEdges: Edge<MigrationEdgeData>[] = [
   },
 ]
 
-const desktopEdges: Edge[] = [
-  {
-    id: 'host-a-desktop-a',
-    source: 'host-a',
-    sourceHandle: 'desktop',
-    target: 'desktop-a',
-    label: 'VNC 5901',
-    style: { stroke: '#3f4c5a' },
-  },
-  {
-    id: 'host-b-desktop-b',
-    source: 'host-b',
-    sourceHandle: 'desktop',
-    target: 'desktop-b',
-    label: 'VNC 5901',
-    style: { stroke: '#3f4c5a' },
-  },
-]
-
 function isDesktopNode(node: GraphNode): node is Node<DesktopNodeData> {
   return node.type === 'desktop'
 }
 
-function nodesWithUrlOverrides(base: GraphNode[]): { nodes: GraphNode[]; overridden: boolean } {
-  const params = new URLSearchParams(window.location.search)
-  let overridden = false
-  const nodes: GraphNode[] = base.map((node) => {
-    if (!isDesktopNode(node)) {
-      return node
-    }
-    const paramName = VNC_PARAM_BY_DESKTOP[node.id]
-    if (!paramName) {
-      return node
-    }
-    const value = params.get(paramName)
-    if (!value) {
-      return node
-    }
-    overridden = true
-    return { ...node, data: { ...node.data, vncNodeId: value } }
-  })
-  return { nodes, overridden }
+function isKnownHost(value: unknown): value is string {
+  return value === HOST_A || value === HOST_B
 }
 
-function statusLabel(status: HostsStatus): string {
-  if (status === 'loading') {
-    return 'loading host registry...'
+function otherHost(host: string): string {
+  return host === HOST_A ? HOST_B : HOST_A
+}
+
+function urlVncNodeId(): string {
+  const params = new URLSearchParams(window.location.search)
+  return params.get('vnc') ?? params.get('nodeA') ?? ''
+}
+
+function urlOwnerHost(): string {
+  const params = new URLSearchParams(window.location.search)
+  const owner = params.get('owner')
+  return isKnownHost(owner) ? owner : ''
+}
+
+function desktopLabel(nodeHostId: string, ownerHost: string): string {
+  if (nodeHostId === ownerHost) {
+    return `XFCE desktop live on ${HOST_LABELS[nodeHostId]} -- VNC over iroh`
   }
-  if (status === 'unreachable') {
-    return 'host registry unreachable, using URL overrides'
+  return `no guest on ${HOST_LABELS[nodeHostId]}`
+}
+
+function desktopEdgesFor(ownerHost: string): Edge[] {
+  const desktopId = DESKTOP_BY_HOST[ownerHost]
+  if (!desktopId) {
+    return []
   }
-  return 'host registry loaded'
+  return [
+    {
+      id: `${ownerHost}-${desktopId}`,
+      source: ownerHost,
+      sourceHandle: 'desktop',
+      target: desktopId,
+      label: 'VNC 5901',
+      style: { stroke: '#3f4c5a' },
+    },
+  ]
 }
 
 function App() {
-  const initial = nodesWithUrlOverrides(initialNodes)
-  const [nodes, setNodes] = useState<GraphNode[]>(initial.nodes)
+  const paramVncNodeId = urlVncNodeId()
+  const paramOwnerHost = urlOwnerHost()
+  const [nodes, setNodes] = useState<GraphNode[]>(initialNodes)
   const [edges, setEdges] = useState<Edge<MigrationEdgeData>[]>(initialEdges)
-  const [hostsStatus, setHostsStatus] = useState<HostsStatus>(
-    initial.overridden ? 'ready' : 'loading',
+  const [ownerHost, setOwnerHost] = useState<string>(paramOwnerHost || HOST_A)
+  const [ownerSource, setOwnerSource] = useState<string>(
+    paramOwnerHost ? 'owner url param' : 'default, server not read yet',
   )
+  const [registry, setRegistry] = useState<HostRegistryEntry[]>([])
+  const [inFlight, setInFlight] = useState<boolean>(false)
+
+  const registryNodeId = registry.find((entry) => entry.id === ownerHost)?.node_id ?? ''
+  const guestVncNodeId = paramVncNodeId || registryNodeId
+  const ownerDesktopId = DESKTOP_BY_HOST[ownerHost] ?? ''
 
   const onNodesChange = (changes: NodeChange<GraphNode>[]) => {
     setNodes((prevNodes) => applyNodeChanges(changes, prevNodes))
@@ -200,68 +208,122 @@ function App() {
     )
   }
 
-  useEffect(() => {
-    let cancelled = false
-    if (initial.overridden) {
+  const adoptOwner = (host: string, source: string) => {
+    if (!isKnownHost(host)) {
       return
     }
+    setOwnerHost(host)
+    setOwnerSource(source)
+  }
 
-    async function loadHosts() {
+  useEffect(() => {
+    let cancelled = false
+
+    async function readOwner(url: string, source: string): Promise<boolean> {
       try {
-        const response = await fetch(HOSTS_URL)
+        const response = await fetch(url)
         if (!response.ok) {
-          if (!cancelled) {
-            setHostsStatus('unreachable')
-          }
-          return
+          return false
         }
-        const entries = (await response.json()) as HostRegistryEntry[]
-        if (cancelled) {
-          return
+        const body = (await response.json()) as GuestResponse
+        if (!isKnownHost(body.host)) {
+          return false
         }
-        setNodes((prevNodes) =>
-          prevNodes.map<GraphNode>((node) => {
-            if (!isDesktopNode(node)) {
-              return node
-            }
-            const entry = entries.find(
-              (candidate) => DESKTOP_BY_HOST[candidate.id] === node.id,
-            )
-            return entry ? { ...node, data: { ...node.data, vncNodeId: entry.node_id } } : node
-          }),
-        )
-        setHostsStatus('ready')
-      } catch {
         if (!cancelled) {
-          setHostsStatus('unreachable')
+          adoptOwner(body.host, source)
         }
+        return true
+      } catch {
+        return false
       }
     }
 
-    void loadHosts()
+    async function seedOwner() {
+      if (await readOwner(GUEST_URL, 'GET /v1/migrations/guest')) {
+        return
+      }
+      if (await readOwner(CURRENT_HOST_URL, 'GET /v1/migrations/current-host')) {
+        return
+      }
+      if (!cancelled) {
+        setOwnerSource(
+          paramOwnerHost
+            ? 'owner url param, server reports no persistent guest'
+            : 'default host-a, server reports no persistent guest',
+        )
+      }
+    }
+
+    async function loadRegistry() {
+      try {
+        const response = await fetch(HOSTS_URL)
+        if (!response.ok) {
+          return
+        }
+        const entries = (await response.json()) as HostRegistryEntry[]
+        if (!cancelled && Array.isArray(entries)) {
+          setRegistry(entries)
+        }
+      } catch {
+        return
+      }
+    }
+
+    void seedOwner()
+    void loadRegistry()
 
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [paramOwnerHost])
 
   useMigrationEvents({
     setNodes: setNodes as React.Dispatch<React.SetStateAction<Node<HostNodeData>[]>>,
     setEdges,
     edgeId: MIGRATION_EDGE_ID,
     hostNodeIds: HOST_NODE_IDS,
+    onOwnerChanged: (toHostId) => adoptOwner(toHostId, 'migration_complete destination'),
+    onInFlightChanged: setInFlight,
   })
+
+  const renderedNodes: GraphNode[] = nodes.map((node) => {
+    if (!isDesktopNode(node)) {
+      return node
+    }
+    const owns = node.id === ownerDesktopId
+    const vncNodeId = owns ? guestVncNodeId : ''
+    const label = desktopLabel(node.data.hostId, ownerHost)
+    if (node.data.vncNodeId === vncNodeId && node.data.label === label) {
+      return node
+    }
+    return { ...node, data: { ...node.data, vncNodeId, label } }
+  })
+
+  window.__desktopOwner = {
+    host: ownerHost,
+    desktop: ownerDesktopId,
+    vncNodeId: guestVncNodeId,
+    source: ownerSource,
+  }
 
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <div className="app-toolbar">
-        <MigrateButton hostA="host-a" hostB="host-b" onHttpStatus={setHttpLabel} />
-        <span className="app-hosts-status">{statusLabel(hostsStatus)}</span>
+        <MigrateButton
+          currentHost={ownerHost}
+          nextHost={otherHost(ownerHost)}
+          inFlight={inFlight}
+          onHttpStatus={setHttpLabel}
+          onServerOwner={(host) => adoptOwner(host, 'POST /v1/migrations current_host')}
+        />
+        <span className="app-hosts-status" data-owner-host={ownerHost} data-owner-source={ownerSource}>
+          {`guest on ${ownerHost} (${ownerSource})`}
+        </span>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         <ReactFlow
-          nodes={nodes}
-          edges={[...desktopEdges, ...edges] as Edge[]}
+          nodes={renderedNodes}
+          edges={[...desktopEdgesFor(ownerHost), ...edges] as Edge[]}
           onNodesChange={onNodesChange}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}

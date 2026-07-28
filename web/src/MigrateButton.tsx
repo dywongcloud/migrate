@@ -1,135 +1,59 @@
-import { useEffect, useRef, useState } from 'react'
-import type { MigrationEvent } from './useMigrationEvents'
-
 export interface MigrateButtonProps {
-  hostA: string
-  hostB: string
+  currentHost: string
+  nextHost: string
+  inFlight: boolean
   apiBase?: string
   onHttpStatus?: (label: string, ok: boolean) => void
+  onServerOwner?: (host: string) => void
 }
 
-interface CurrentHostResponse {
-  host?: string
+interface MigrateResponse {
+  current_host?: string
+  blackout_ms?: number
+  guest_mem_mib?: number
 }
 
-const DEFAULT_API_BASE = 'http://localhost:7040'
-
-function otherHost(host: string, hostA: string, hostB: string): string {
-  return host === hostA ? hostB : hostA
-}
+export const DEFAULT_API_BASE = 'http://localhost:7040'
 
 export function MigrateButton({
-  hostA,
-  hostB,
+  currentHost,
+  nextHost,
+  inFlight,
   apiBase = DEFAULT_API_BASE,
   onHttpStatus,
+  onServerOwner,
 }: MigrateButtonProps) {
-  const [currentHost, setCurrentHost] = useState<string>(hostA)
-  const [inFlightCount, setInFlightCount] = useState<number>(0)
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
-  const pairByMigrationId = useRef(new Map<string, { from: string; to: string }>())
-
-  useEffect(() => {
-    let cancelled = false
-
-    async function seedCurrentHost() {
-      try {
-        const response = await fetch(`${apiBase}/v1/migrations/current-host`)
-        if (!response.ok) {
-          return
-        }
-        const body = (await response.json()) as CurrentHostResponse
-        if (!cancelled && (body.host === hostA || body.host === hostB)) {
-          setCurrentHost(body.host)
-        }
-      } catch {
-        return
-      }
-    }
-
-    void seedCurrentHost()
-
-    return () => {
-      cancelled = true
-    }
-  }, [apiBase, hostA, hostB])
-
-  useEffect(() => {
-    const source = new EventSource(`${apiBase}/v1/migrations/events`)
-
-    source.onmessage = (message: MessageEvent<string>) => {
-      let event: MigrationEvent
-      try {
-        event = JSON.parse(message.data) as MigrationEvent
-      } catch {
-        return
-      }
-
-      if (event.type === 'migration_start') {
-        if (event.from && event.to) {
-          const touchesThisPair =
-            (event.from === hostA || event.from === hostB) &&
-            (event.to === hostA || event.to === hostB)
-          if (touchesThisPair) {
-            pairByMigrationId.current.set(event.migration_id, { from: event.from, to: event.to })
-            setInFlightCount((count) => count + 1)
-          }
-        }
-        return
-      }
-
-      if (event.type === 'migration_complete') {
-        const pair = pairByMigrationId.current.get(event.migration_id)
-        if (pair) {
-          pairByMigrationId.current.delete(event.migration_id)
-          setInFlightCount((count) => Math.max(0, count - 1))
-          setCurrentHost(pair.to)
-        }
-        return
-      }
-
-      if (event.type === 'migration_failed') {
-        const pair = pairByMigrationId.current.get(event.migration_id)
-        if (pair) {
-          pairByMigrationId.current.delete(event.migration_id)
-          setInFlightCount((count) => Math.max(0, count - 1))
-        }
-        return
-      }
-    }
-
-    return () => {
-      source.close()
-    }
-  }, [apiBase, hostA, hostB])
-
-  const inFlight = inFlightCount > 0
-  const disabled = inFlight || isSubmitting
-
   async function handleClick() {
-    const from = currentHost
-    const to = otherHost(currentHost, hostA, hostB)
-
-    setIsSubmitting(true)
     onHttpStatus?.('HTTP ...', true)
+    let response: Response
     try {
-      const response = await fetch(`${apiBase}/v1/migrations`, {
+      response = await fetch(`${apiBase}/v1/migrations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mem_mib: 32, from, to }),
+        body: '{}',
       })
-      onHttpStatus?.(`HTTP ${response.status}`, response.ok)
     } catch {
       onHttpStatus?.('HTTP ERR', false)
       return
-    } finally {
-      setIsSubmitting(false)
+    }
+    onHttpStatus?.(`HTTP ${response.status}`, response.ok)
+    if (!response.ok) {
+      return
+    }
+    let body: MigrateResponse
+    try {
+      body = (await response.json()) as MigrateResponse
+    } catch {
+      return
+    }
+    if (typeof body.current_host === 'string' && body.current_host !== '') {
+      onServerOwner?.(body.current_host)
     }
   }
 
   return (
-    <button type="button" onClick={() => void handleClick()} disabled={disabled}>
-      {inFlight ? 'Migrating...' : `Migrate (${currentHost} -> ${otherHost(currentHost, hostA, hostB)})`}
+    <button type="button" onClick={() => void handleClick()} disabled={inFlight}>
+      {inFlight ? 'Migrating...' : `Migrate (${currentHost} -> ${nextHost})`}
     </button>
   )
 }

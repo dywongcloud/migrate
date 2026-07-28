@@ -107,21 +107,27 @@ CLI (`daedald livemigrate ...`, used by the demos and the p99 harness).
 
 ## GUI demo (desktop guests + live migration, visualized)
 
-`web/` renders a four-node graph: the two Firecracker hosts, and under each one
-the XFCE desktop guest it holds, VNC-viewable in the browser over an iroh QUIC
-tunnel (`gateway/vnc-tunnel-agent` next to the guest, `gateway/vnc-ws-gateway`
-bridging to the browser's WebSocket). The edge between the two hosts animates
-off real `daedald livemigrate serve` SSE events (`GET /v1/migrations/events`),
-not a timer.
+`web/` renders a four-node graph: the two Firecracker hosts, and under each one a
+card for the XFCE desktop guest when that host holds it, VNC-viewable in the
+browser over an iroh QUIC tunnel (`gateway/vnc-tunnel-agent` next to the guest,
+`gateway/vnc-ws-gateway` bridging to the browser's WebSocket). The edge between
+the two hosts animates off real `daedald livemigrate serve` SSE events
+(`GET /v1/migrations/events`), not a timer.
 
-**The Migrate button moves the actual desktop.** `daedald livemigrate serve
--persistent-guest` boots one 1024 MiB XFCE guest at startup and every
-`POST /v1/migrations` live-migrates *that same running guest* between the two
-hosts, alternating direction, never rebooting it. It keeps its MAC and IP via
-Firecracker `network_overrides`, and because both host taps sit on one bridge a
-single tunnel agent keeps serving it -- the VNC stream stays on the same tunnel
-across the move. The `host-b` card holds a second, pinned desktop guest that
-never migrates, so the two cards are always two different machines.
+**The Migrate button moves the actual desktop, and the picture moves with it.**
+`daedald livemigrate serve -persistent-guest` boots one 1024 MiB XFCE guest at
+startup and every `POST /v1/migrations` live-migrates *that same running guest*
+between the two hosts, alternating direction, never rebooting it. It keeps its
+MAC and IP via Firecracker `network_overrides`, and because both host taps sit on
+one bridge a single tunnel agent keeps serving it -- the VNC stream stays on the
+same tunnel across the move. Nothing about the stream changes when the guest
+moves, so the GUI cannot infer the move from the stream: it tracks ownership
+explicitly. `App.tsx` seeds the owner from `GET /v1/migrations/guest` (whose
+`host` field is the live guest's real current host) and moves the desktop card on
+the `migration_complete` event's real destination, clearing the card on the host
+that no longer has the guest. The desktop card is a view of the owner, not a
+second pinned machine -- only one desktop guest exists, and only the host holding
+it shows a screen.
 
 Measured on the 1024 MiB desktop guest (three consecutive migrations of one
 running guest, inside the nested-virt Lima VM):
@@ -142,9 +148,11 @@ the cutover is the "guest is nowhere" window.
 bash scripts/desktop-migration-demo.sh
 ```
 
-rebuilds and starts every piece (`daedald` in persistent-guest mode, both
-desktop guests, both VNC tunnel agents, the gateway, the frontend), registers
-both tunnel endpoints with `daedald`, and prints the demo URL. See
+rebuilds and starts every piece (`daedald` in persistent-guest mode, the desktop
+guest, the VNC tunnel agent, the gateway, the frontend) and prints the demo URL.
+The URL carries the guest's tunnel node id as `?vnc=<node-id>` (`?nodeA=` still
+works as a legacy alias) and optionally `&owner=host-a|host-b` to override the
+seeded owner; without `owner` the owner comes from the server. See
 `AGENTS.md`'s "GUI desktop guests" section for the wiring and the real hazards
 (shared read-write rootfs, tap-name collisions, the guest's broken sshd).
 # migrate

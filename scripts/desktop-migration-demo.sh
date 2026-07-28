@@ -219,9 +219,11 @@ fi
 
 echo
 echo "=== demo URL ==="
-echo "http://localhost:$WEB_PORT/"
-echo "  (the frontend reads both desktop endpoints from GET /v1/hosts; no URL params needed)"
-echo "  explicit form: http://localhost:$WEB_PORT/?nodeA=${NODE_ID_MIG:-MISSING}&nodeB=${NODE_ID_PIN:-MISSING}"
+echo "http://localhost:$WEB_PORT/?vnc=${NODE_ID_MIG:-MISSING}"
+echo "  the migrating guest has ONE tunnel node id; the desktop card follows whichever"
+echo "  host owns the guest, seeded from GET /v1/migrations/guest and moved on the real"
+echo "  migration_complete destination. Add &owner=host-a or &owner=host-b to override"
+echo "  the seed; ?nodeA= still works as a legacy alias for ?vnc=."
 echo
 echo "daedald API:        http://$DAEDALD_LISTEN"
 echo "current host:       $(curl -s "http://$DAEDALD_LISTEN/v1/migrations/current-host")"
