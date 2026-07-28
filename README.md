@@ -107,21 +107,44 @@ CLI (`daedald livemigrate ...`, used by the demos and the p99 harness).
 
 ## GUI demo (desktop guests + live migration, visualized)
 
-`web/` renders each host's own persistent XFCE desktop guest as a React Flow
-node, VNC-viewable in the browser over an iroh QUIC tunnel
-(`gateway/vnc-tunnel-agent` next to the guest, `gateway/vnc-ws-gateway`
-bridging to the browser's WebSocket). These desktop guests are never
-migrated. The Migrate button in the UI triggers the SEPARATE, unmodified
-`api/internal/livemigrate` beacon-guest migration above between the same two
-hosts; the edge between the two nodes animates off that migration's real
-`daedald livemigrate serve` SSE events (`GET /v1/migrations/events`), not a
-timer. See `AGENTS.md`'s "GUI Tier-1 design" section for the full wiring,
-including which pieces are still scaffolds.
+`web/` renders a four-node graph: the two Firecracker hosts, and under each one
+the XFCE desktop guest it holds, VNC-viewable in the browser over an iroh QUIC
+tunnel (`gateway/vnc-tunnel-agent` next to the guest, `gateway/vnc-ws-gateway`
+bridging to the browser's WebSocket). The edge between the two hosts animates
+off real `daedald livemigrate serve` SSE events (`GET /v1/migrations/events`),
+not a timer.
+
+**The Migrate button moves the actual desktop.** `daedald livemigrate serve
+-persistent-guest` boots one 1024 MiB XFCE guest at startup and every
+`POST /v1/migrations` live-migrates *that same running guest* between the two
+hosts, alternating direction, never rebooting it. It keeps its MAC and IP via
+Firecracker `network_overrides`, and because both host taps sit on one bridge a
+single tunnel agent keeps serving it -- the VNC stream stays on the same tunnel
+across the move. The `host-b` card holds a second, pinned desktop guest that
+never migrates, so the two cards are always two different machines.
+
+Measured on the 1024 MiB desktop guest (three consecutive migrations of one
+running guest, inside the nested-virt Lima VM):
+
+| | migration 1 | migration 2 | migration 3 |
+|---|---|---|---|
+| cutover blackout | 34.4 ms | 12.5 ms | 10.6 ms |
+| pre-copy Full snapshot pause | 1928 ms | 915 ms | 357 ms |
+
+The `<= 30 ms` headline above is the 32 MiB beacon guest's cutover and does
+**not** cover this guest: the first desktop migration after boot measured
+34.4 ms (its `load_resume` alone was 27.9 ms), settling to ~10-13 ms afterwards.
+The pre-copy Full snapshot is a separate, much larger one-time pause because it
+writes a 1 GiB memory image to the shared tmpfs while the guest is paused; only
+the cutover is the "guest is nowhere" window.
 
 ```sh
 bash scripts/desktop-migration-demo.sh
 ```
 
-rebuilds and starts every piece (`daedald`, the VNC tunnel agents and
-gateway, the beacon container pair, the frontend) and prints the demo URL.
+rebuilds and starts every piece (`daedald` in persistent-guest mode, both
+desktop guests, both VNC tunnel agents, the gateway, the frontend), registers
+both tunnel endpoints with `daedald`, and prints the demo URL. See
+`AGENTS.md`'s "GUI desktop guests" section for the wiring and the real hazards
+(shared read-write rootfs, tap-name collisions, the guest's broken sshd).
 # migrate

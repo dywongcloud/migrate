@@ -31,6 +31,7 @@ export interface UseMigrationEventsOptions {
   fadeDurationMs?: number
   holdDurationMs?: number
   hostNodeIds?: Record<string, string>
+  groupNodeIds?: Record<string, string>
   edgeId: string
   setNodes: Dispatch<SetStateAction<Node<MicroVMNodeData>[]>>
   setEdges: Dispatch<SetStateAction<Edge<MigrationEdgeData>[]>>
@@ -64,7 +65,15 @@ export function useMigrationEvents(options: UseMigrationEventsOptions): void {
     }
 
     const setNodeHighlight = (hostIds: string[], value: boolean): void => {
+      const groups = optionsRef.current.groupNodeIds
       const targetNodeIds = new Set(hostIds.map(resolveNodeId))
+      if (groups) {
+        for (const hostId of hostIds) {
+          if (groups[hostId]) {
+            targetNodeIds.add(groups[hostId])
+          }
+        }
+      }
       optionsRef.current.setNodes((prevNodes) =>
         prevNodes.map((node) =>
           targetNodeIds.has(node.id)
