@@ -1,9 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import type { Node, Edge } from '@xyflow/react'
-import type { MigrationEdgeData } from './types'
-
-export type HighlightableNode = Node<Record<string, unknown>>
+import type { MicroVMNodeData, MigrationEdgeData } from './types'
 
 export type MigrationEventType =
   | 'migration_start'
@@ -33,9 +31,8 @@ export interface UseMigrationEventsOptions {
   fadeDurationMs?: number
   holdDurationMs?: number
   hostNodeIds?: Record<string, string>
-  groupNodeIds?: Record<string, string>
   edgeId: string
-  setNodes: Dispatch<SetStateAction<HighlightableNode[]>>
+  setNodes: Dispatch<SetStateAction<Node<MicroVMNodeData>[]>>
   setEdges: Dispatch<SetStateAction<Edge<MigrationEdgeData>[]>>
   onOwnerChanged?: (toHostId: string) => void
 }
@@ -67,15 +64,7 @@ export function useMigrationEvents(options: UseMigrationEventsOptions): void {
     }
 
     const setNodeHighlight = (hostIds: string[], value: boolean): void => {
-      const groups = optionsRef.current.groupNodeIds
       const targetNodeIds = new Set(hostIds.map(resolveNodeId))
-      if (groups) {
-        for (const hostId of hostIds) {
-          if (groups[hostId]) {
-            targetNodeIds.add(groups[hostId])
-          }
-        }
-      }
       optionsRef.current.setNodes((prevNodes) =>
         prevNodes.map((node) =>
           targetNodeIds.has(node.id)

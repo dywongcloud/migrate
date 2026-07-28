@@ -1,16 +1,10 @@
 .desktop-node {
-  width: 588px;
-  box-sizing: border-box;
+  width: 504px;
 }
 
 .desktop-inner {
   padding: 10px 12px 12px;
   gap: 8px;
-  align-items: center;
-}
-
-.desktop-inner .turbo-head {
-  width: 100%;
 }
 
 .desktop-icon {

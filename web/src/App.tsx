@@ -11,27 +11,28 @@ import {
   type NodeChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import type { DesktopNodeData, MigrationEdgeData } from './types'
+import type { HostNodeData, DesktopNodeData, MigrationEdgeData } from './types'
+import { MicroVMNode } from './MicroVMNode'
 import { DesktopNode } from './DesktopNode'
-import { GroupNode } from './GroupNode'
-import { ComponentNode } from './ComponentNode'
 import { MigrationEdge } from './MigrationEdge'
-import { useMigrationEvents, type HighlightableNode } from './useMigrationEvents'
+import { useMigrationEvents } from './useMigrationEvents'
 import { MigrateButton } from './MigrateButton'
-import {
-  buildNodes,
-  buildComponentEdges,
-  buildMigrationEdges,
-  MIGRATION_EDGE_ID,
-  HOST_NODE_IDS,
-  GROUP_BY_HOST,
-  DESKTOP_BY_HOST,
-  VNC_PARAM_BY_DESKTOP,
-  type GraphNode,
-} from './graph'
 import './App.toolbar.css'
 
 const HOSTS_URL = 'http://localhost:7040/v1/hosts'
+const MIGRATION_EDGE_ID = 'host-a-host-b'
+const HOST_NODE_IDS: Record<string, string> = {
+  'host-a': 'host-a',
+  'host-b': 'host-b',
+}
+const DESKTOP_BY_HOST: Record<string, string> = {
+  'host-a': 'desktop-a',
+  'host-b': 'desktop-b',
+}
+const VNC_PARAM_BY_DESKTOP: Record<string, string> = {
+  'desktop-a': 'nodeA',
+  'desktop-b': 'nodeB',
+}
 
 interface HostRegistryEntry {
   id: string
@@ -46,14 +47,100 @@ declare global {
   }
 }
 
-const nodeTypes: NodeTypes = {
-  desktop: DesktopNode,
-  vmgroup: GroupNode,
-  component: ComponentNode,
-}
+const nodeTypes: NodeTypes = { microvm: MicroVMNode, desktop: DesktopNode }
 const edgeTypes: EdgeTypes = { migration: MigrationEdge }
 
-const componentEdges = buildComponentEdges()
+type GraphNode = Node<HostNodeData> | Node<DesktopNodeData>
+
+const initialNodes: GraphNode[] = [
+  {
+    id: 'host-a',
+    type: 'microvm',
+    position: { x: 40, y: 0 },
+    data: {
+      id: 'host-a',
+      label: 'Host A',
+      hostAddr: '',
+      status: 'running',
+      migrationHighlight: false,
+    },
+  },
+  {
+    id: 'host-b',
+    type: 'microvm',
+    position: { x: 800, y: 0 },
+    data: {
+      id: 'host-b',
+      label: 'Host B',
+      hostAddr: '',
+      status: 'running',
+      migrationHighlight: false,
+    },
+  },
+  {
+    id: 'desktop-a',
+    type: 'desktop',
+    position: { x: 0, y: 200 },
+    dragHandle: '.desktop-drag-handle',
+    data: {
+      id: 'desktop-a',
+      label: 'XFCE desktop (host A) -- VNC over iroh',
+      hostId: 'host-a',
+      vncNodeId: '',
+    },
+  },
+  {
+    id: 'desktop-b',
+    type: 'desktop',
+    position: { x: 700, y: 200 },
+    dragHandle: '.desktop-drag-handle',
+    data: {
+      id: 'desktop-b',
+      label: 'XFCE desktop (host B) -- VNC over iroh',
+      hostId: 'host-b',
+      vncNodeId: '',
+    },
+  },
+]
+
+const initialEdges: Edge<MigrationEdgeData>[] = [
+  {
+    id: MIGRATION_EDGE_ID,
+    type: 'migration',
+    source: 'host-a',
+    target: 'host-b',
+    hidden: true,
+    data: {
+      id: MIGRATION_EDGE_ID,
+      source: 'host-a',
+      target: 'host-b',
+      migrating: false,
+      holding: false,
+      fadingOut: false,
+      httpLabel: '',
+      httpOk: true,
+    },
+  },
+]
+
+const desktopEdges: Edge[] = [
+  {
+    id: 'host-a-desktop-a',
+    source: 'host-a',
+    sourceHandle: 'desktop',
+    target: 'desktop-a',
+    label: 'VNC 5901',
+    style: { stroke: '#3f4c5a' },
+  },
+  {
+    id: 'host-b-desktop-b',
+    source: 'host-b',
+    sourceHandle: 'desktop',
+    target: 'desktop-b',
+    label: 'VNC 5901',
+    style: { stroke: '#3f4c5a' },
+  },
+]
 
 function isDesktopNode(node: GraphNode): node is Node<DesktopNodeData> {
   return node.type === 'desktop'
@@ -66,7 +153,11 @@ function nodesWithUrlOverrides(base: GraphNode[]): { nodes: GraphNode[]; overrid
     if (!isDesktopNode(node)) {
       return node
     }
-    const value = params.get(VNC_PARAM_BY_DESKTOP[node.id])
+    const paramName = VNC_PARAM_BY_DESKTOP[node.id]
+    if (!paramName) {
+      return node
+    }
+    const value = params.get(paramName)
     if (!value) {
       return node
     }
@@ -87,9 +178,9 @@ function statusLabel(status: HostsStatus): string {
 }
 
 function App() {
-  const initial = nodesWithUrlOverrides(buildNodes())
+  const initial = nodesWithUrlOverrides(initialNodes)
   const [nodes, setNodes] = useState<GraphNode[]>(initial.nodes)
-  const [edges, setEdges] = useState<Edge<MigrationEdgeData>[]>(buildMigrationEdges())
+  const [edges, setEdges] = useState<Edge<MigrationEdgeData>[]>(initialEdges)
   const [hostsStatus, setHostsStatus] = useState<HostsStatus>(
     initial.overridden ? 'ready' : 'loading',
   )
@@ -155,11 +246,10 @@ function App() {
   }, [])
 
   useMigrationEvents({
-    setNodes: setNodes as React.Dispatch<React.SetStateAction<HighlightableNode[]>>,
+    setNodes: setNodes as React.Dispatch<React.SetStateAction<Node<HostNodeData>[]>>,
     setEdges,
     edgeId: MIGRATION_EDGE_ID,
     hostNodeIds: HOST_NODE_IDS,
-    groupNodeIds: GROUP_BY_HOST,
   })
 
   return (
@@ -171,12 +261,12 @@ function App() {
       <div style={{ flex: 1, minHeight: 0 }}>
         <ReactFlow
           nodes={nodes}
-          edges={[...componentEdges, ...edges] as Edge[]}
+          edges={[...desktopEdges, ...edges] as Edge[]}
           onNodesChange={onNodesChange}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           nodesDraggable
-          minZoom={0.15}
+          minZoom={0.2}
           fitView
         >
           <Background />

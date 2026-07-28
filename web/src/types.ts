@@ -1,19 +1,9 @@
-export interface GroupNodeData {
+export interface HostNodeData {
   id: string;
   label: string;
-  detail: string;
+  hostAddr: string;
   status: 'running' | 'migrating' | 'idle';
   migrationHighlight: boolean;
-  [key: string]: unknown;
-}
-
-export type ComponentKind = 'kernel' | 'rootfs' | 'netrootfs' | 'init' | 'net' | 'vnc' | 'vmm';
-
-export interface ComponentNodeData {
-  id: string;
-  kind: ComponentKind;
-  label: string;
-  detail: string;
   [key: string]: unknown;
 }
 
@@ -24,6 +14,8 @@ export interface DesktopNodeData {
   vncNodeId: string;
   [key: string]: unknown;
 }
+
+export type MicroVMNodeData = HostNodeData;
 
 export interface MigrationEdgeData {
   id: string;
