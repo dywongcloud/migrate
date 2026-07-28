@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = [
+    "gateway-relay-common",
+    "vnc-tunnel-agent",
+    "vnc-ws-gateway",
+    "desktop-broadcast",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+gateway-relay-common = { path = "gateway-relay-common" }
+iroh = "1.0.3"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.30"
+futures-util = "0.3"
+anyhow = "1"
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", rev = "5f95758", default-features = false, features = [
+    "h264",
+    "opus",
+] }
+rusty-capture = { git = "https://github.com/n0-computer/iroh-live", rev = "5f95758", default-features = false, features = [
+    "x11",
+] }
+
+# Tier-2 video (real H.264/MoQ via iroh-live): upstream is unpublished on
+# crates.io and pins commit 5f95758. The user's own vendored patches at
+# ../holoiroh-vendor (dywongcloud/agentos, fetched by
+# scripts/vendor-iroh-live.sh) broaden iroh-live-patched's VideoToolbox cfg
+# gates and fix an openh264-sys2 ios-sim build.rs panic -- neither bug is
+# reachable from this Linux target, but the patch is applied unconditionally
+# to match the vendored source exactly and stay in sync with future updates.
+# holoiroh-vendor must stay a SIBLING of this workspace root (never nested):
+# rusty-capture's own [workspace.dependencies] governs it once patched, and a
+# nested checkout would incorrectly inherit this Cargo.toml's (dependency-less)
+# workspace table instead.
+[patch."https://github.com/n0-computer/iroh-live"]
+iroh-live = { path = "../holoiroh-vendor/iroh-live-patched/iroh-live" }
+rusty-capture = { path = "../holoiroh-vendor/iroh-live-patched/rusty-capture" }
+
+[patch.crates-io]
+openh264-sys2 = { path = "../holoiroh-vendor/openh264-rs-patched/openh264-sys2" }

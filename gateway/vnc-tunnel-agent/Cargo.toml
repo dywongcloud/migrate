@@ -1,0 +1,14 @@
+[package]
+name = "vnc-tunnel-agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "vnc-tunnel-agent"
+path = "src/main.rs"
+
+[dependencies]
+gateway-relay-common = { workspace = true }
+iroh = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }

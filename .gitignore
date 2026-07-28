@@ -10,3 +10,11 @@ kernel/build/
 *.mem
 bin/
 .DS_Store
+node_modules/
+web/dist/
+gateway/target/
+vnc-tunnel-agent.key
+desktop-broadcast.key
+holoiroh-vendor/
+api/daedald
+web/vite-dev.log

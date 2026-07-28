@@ -1,0 +1,15 @@
+[package]
+name = "vnc-ws-gateway"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "vnc-ws-gateway"
+path = "src/main.rs"
+
+[dependencies]
+iroh = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+anyhow = { workspace = true }

@@ -52,10 +52,12 @@ Details and the primitives used are in `docs/livemigrate.md`.
 | `api/internal/livemigrate/` | the migration orchestrator (pre-copy, cutover, blackout timing) |
 | `api/cmd/daedald/livemigrate*.go` | CLI + REST API (`daedald livemigrate`, `daedald livemigrate serve`) |
 | `images/` | the in-guest UDP beacon (`beacon.c`) and the host-side collector/analyzer |
-| `scripts/` | build scripts, the single-host and two-container demos, the p99 harness |
+| `scripts/` | build scripts, the single-host and two-container demos, the p99 harness, the GUI demo |
 | `bench/` | measured results (`RESULTS-livemigrate.md`) |
 | `docs/DEMO.md` | the <=120s video walkthrough |
 | `AI-USAGE.md` | how AI was used (disclosed, per the challenge policy) |
+| `web/` | the React Flow GUI (two-host visualization, Migrate button, SSE-driven edge animation) |
+| `gateway/` | the iroh QUIC VNC tunnel between a desktop guest and the browser (`vnc-tunnel-agent`, `vnc-ws-gateway`) |
 
 The repo also contains an earlier snapshot-based migration service (`daedald
 serve`, `internal/migrate`) and a PVM/no-hardware-virt kernel path; those are the
@@ -103,4 +105,24 @@ curl -s localhost:7040/v1/metrics                          # blackout p50/p95/p9
 
 The same orchestration is a Go package (`livemigrate.Run(Config)`) and a one-shot
 CLI (`daedald livemigrate ...`, used by the demos and the p99 harness).
+
+## GUI demo (desktop guests + live migration, visualized)
+
+`web/` renders each host's own persistent XFCE desktop guest as a React Flow
+node, VNC-viewable in the browser over an iroh QUIC tunnel
+(`gateway/vnc-tunnel-agent` next to the guest, `gateway/vnc-ws-gateway`
+bridging to the browser's WebSocket). These desktop guests are never
+migrated. The Migrate button in the UI triggers the SEPARATE, unmodified
+`api/internal/livemigrate` beacon-guest migration above between the same two
+hosts; the edge between the two nodes animates off that migration's real
+`daedald livemigrate serve` SSE events (`GET /v1/migrations/events`), not a
+timer. See `AGENTS.md`'s "GUI Tier-1 design" section for the full wiring,
+including which pieces are still scaffolds.
+
+```sh
+bash scripts/desktop-migration-demo.sh
+```
+
+rebuilds and starts every piece (`daedald`, the VNC tunnel agents and
+gateway, the beacon container pair, the frontend) and prints the demo URL.
 # migrate

@@ -1,0 +1,15 @@
+.app-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #161616;
+  color: #ccc;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  border-bottom: 1px solid #333;
+}
+
+.app-hosts-status {
+  color: #888;
+}

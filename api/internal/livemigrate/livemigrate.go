@@ -34,6 +34,27 @@ type NetOverride struct {
 	HostTap string
 }
 
+// EventKind names a real transition Run reaches during a migration.
+type EventKind string
+
+const (
+	EventCutoverStart       EventKind = "cutover_start"
+	EventLoadResumeComplete EventKind = "load_resume_complete"
+	EventRollback           EventKind = "rollback"
+)
+
+// Event reports a Run transition to Config.Progress. BlackoutMs is populated
+// on EventLoadResumeComplete; Err is populated on EventRollback.
+type Event struct {
+	Kind       EventKind
+	BlackoutMs float64
+	Err        error
+}
+
+// ProgressFunc receives Run's real transitions as they happen. Nil disables
+// progress reporting.
+type ProgressFunc func(Event)
+
 // Config parameterizes a single-host live migration between two Firecracker
 // processes that share a tmpfs directory (SharedDir).
 type Config struct {
@@ -57,6 +78,8 @@ type Config struct {
 	DstLog  string
 
 	FaultInjectRestore bool // force the destination restore to fail, to exercise rollback
+
+	Progress ProgressFunc
 }
 
 // Result reports the timings of a completed migration. CutoverStartUnixNs and
@@ -184,6 +207,9 @@ func Run(c Config) (*Result, *Handles, error) {
 	// ---- cutover: the guest is not executing anywhere for this window ----
 	t0 := time.Now()
 	res.CutoverStartUnixNs = t0.UnixNano()
+	if c.Progress != nil {
+		c.Progress(Event{Kind: EventCutoverStart})
+	}
 
 	tp := time.Now()
 	if err := src.pause(); err != nil {
@@ -207,7 +233,11 @@ func Run(c Config) (*Result, *Handles, error) {
 			h.Uffd.kill()
 			h.Uffd = nil
 		}
-		return nil, h, fmt.Errorf("migration rolled back, guest still on source: %w", err)
+		wrapped := fmt.Errorf("migration rolled back, guest still on source: %w", err)
+		if c.Progress != nil {
+			c.Progress(Event{Kind: EventRollback, Err: wrapped})
+		}
+		return nil, h, wrapped
 	}
 
 	tp = time.Now()
@@ -249,6 +279,9 @@ func Run(c Config) (*Result, *Handles, error) {
 	res.PhasesMs["load_resume"] = ms(time.Since(tp))
 
 	res.BlackoutMs = ms(time.Since(t0))
+	if c.Progress != nil {
+		c.Progress(Event{Kind: EventLoadResumeComplete, BlackoutMs: res.BlackoutMs})
+	}
 	res.CutoverEndUnixNs = time.Now().UnixNano()
 	// ---- guest is now executing on the destination ----
 

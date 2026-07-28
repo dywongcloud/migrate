@@ -1,0 +1,26 @@
+.migration-edge {
+  stroke: #555;
+  stroke-width: 2;
+  fill: none;
+  transition: opacity 600ms ease;
+  opacity: 1;
+}
+
+.migration-edge-active {
+  stroke: #4fc3f7;
+  stroke-width: 3;
+  stroke-dasharray: 6 4;
+  animation: migration-edge-march 0.5s linear infinite;
+}
+
+.migration-edge-fading {
+  stroke: #4fc3f7;
+  stroke-width: 3;
+  opacity: 0;
+}
+
+@keyframes migration-edge-march {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
