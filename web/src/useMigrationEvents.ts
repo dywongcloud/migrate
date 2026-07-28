@@ -33,6 +33,7 @@ export interface UseMigrationEventsOptions {
   edgeId: string
   setNodes: Dispatch<SetStateAction<Node<MicroVMNodeData>[]>>
   setEdges: Dispatch<SetStateAction<Edge<MigrationEdgeData>[]>>
+  onOwnerChanged?: (toHostId: string) => void
 }
 
 export const DEFAULT_MIGRATION_EVENTS_URL = 'http://localhost:7040/v1/migrations/events'
@@ -120,6 +121,9 @@ export function useMigrationEvents(options: UseMigrationEventsOptions): void {
           setEdgeFlags({ migrating: false, fadingOut: true })
           if (pair) {
             setNodeHighlight([pair.from, pair.to], false)
+          }
+          if (pair) {
+            optionsRef.current.onOwnerChanged?.(pair.to)
           }
           const fadeDurationMs = optionsRef.current.fadeDurationMs ?? DEFAULT_FADE_DURATION_MS
           const timer = setTimeout(() => {

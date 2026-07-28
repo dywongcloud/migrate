@@ -93,6 +93,35 @@ const NODE_ID_PARAMS: Record<string, string> = {
   'host-b-desktop': 'nodeB',
 }
 
+const HOST_IDS = ['host-a', 'host-b']
+
+function readMigratingDesktop(): { vncNodeId: string; owner: string } | null {
+  const params = new URLSearchParams(window.location.search)
+  const vncNodeId = params.get('vnc')
+  if (!vncNodeId) {
+    return null
+  }
+  const requested = params.get('owner')
+  const owner = requested && HOST_IDS.includes(requested) ? requested : HOST_IDS[0]
+  return { vncNodeId, owner }
+}
+
+function assignDesktopToOwner(
+  base: Node<MicroVMNodeData>[],
+  vncNodeId: string,
+  ownerHost: string,
+): Node<MicroVMNodeData>[] {
+  const ownerNodeId = HOST_NODE_IDS[ownerHost]
+  return base.map((node) => ({
+    ...node,
+    data: {
+      ...node.data,
+      vncNodeId: node.id === ownerNodeId ? vncNodeId : '',
+      status: node.id === ownerNodeId ? 'running' : 'idle',
+    },
+  }))
+}
+
 function nodesWithUrlOverrides(
   base: Node<MicroVMNodeData>[],
 ): { nodes: Node<MicroVMNodeData>[]; overridden: boolean } {
@@ -110,12 +139,25 @@ function nodesWithUrlOverrides(
 }
 
 function App() {
-  const initial = nodesWithUrlOverrides(initialNodes)
+  const migrating = readMigratingDesktop()
+  const initial = migrating
+    ? {
+        nodes: assignDesktopToOwner(initialNodes, migrating.vncNodeId, migrating.owner),
+        overridden: true,
+      }
+    : nodesWithUrlOverrides(initialNodes)
   const [nodes, setNodes] = useState<Node<MicroVMNodeData>[]>(initial.nodes)
   const [edges, setEdges] = useState<Edge<MigrationEdgeData>[]>(initialEdges)
   const [hostsStatus, setHostsStatus] = useState<HostsStatus>(
     initial.overridden ? 'ready' : 'loading',
   )
+
+  const moveDesktopTo = (toHostId: string) => {
+    if (!migrating) {
+      return
+    }
+    setNodes((prevNodes) => assignDesktopToOwner(prevNodes, migrating.vncNodeId, toHostId))
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -162,6 +204,7 @@ function App() {
     setEdges,
     edgeId: MIGRATION_EDGE_ID,
     hostNodeIds: HOST_NODE_IDS,
+    onOwnerChanged: moveDesktopTo,
   })
 
   return (
