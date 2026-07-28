@@ -310,7 +310,20 @@ func liveMigrateServe(args []string) {
 	})
 
 	log.Printf("live-migration API listening on %s (target blackout %.0fms)", *listen, *target)
-	log.Fatal(http.ListenAndServe(*listen, mux))
+	log.Fatal(http.ListenAndServe(*listen, withCORS(mux)))
+}
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
